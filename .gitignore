@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.egg-info/
+.venv/
+
+# Generated artifacts (keep .gitkeep, ignore actual outputs)
+outputs/mock/*.json
+outputs/plans/*.json
+outputs/maps/*.html

@@ -1,0 +1,22 @@
+[project]
+name = "esp-route-planner"
+version = "0.1.0"
+description = "ESP well route optimization microservice"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.0",
+    "ortools>=9.10",
+    "folium>=0.17",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx",
+    "pytest",
+    "pytest-asyncio",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
