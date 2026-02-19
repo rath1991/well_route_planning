@@ -2,43 +2,61 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project
-
-ESP Route Planner — a FastAPI microservice that selects optimal ESP wells to visit and computes priority-maximizing routes under time/stop constraints. Uses OR-Tools (prize-collecting VRP with disjunction penalties) and Folium for animated map generation.
-
-The objective is **maximize total priority_score captured** (dimensionless 0–100, not money). Priority is derived from production criticality, uplift potential, operational urgency, data confidence, and visit recency.
-
 ## Build & Run
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-uvicorn src.app:app --reload
+uvicorn src.app:app --reload          # http://127.0.0.1:8000
 ```
 
-## Architecture
+Environment variables are loaded from `.env` at project root (gitignored).
 
-Entry point: `src/app.py` (FastAPI). Domain logic in `src/esp_route_planner/`:
+## Architecture: ElevenLabs Webhook API
 
-- **schemas.py** — Pydantic v2 models. Well includes Chevron-specific fields (asset, corridor, ctb, pad_name, action_required, days_since_last_visit/test).
-- **scoring.py** — Deterministic priority formula: `0.30*prod + 0.25*uplift + 0.25*urgency + 0.10*confidence + 0.10*recency`. Returns `ScoreBreakdown` per well.
-- **mock_data.py** — Chevron-style well names (CMC RANGER 4844CL), realistic issues (well_test_quality_issue, pump_efficiency_drop, etc.), operator-phrased actions.
-- **travel_time.py** — (N+2)x(N+2) haversine travel-time matrix.
-- **optimizer.py** — OR-Tools solver. Disjunction penalty = priority_score * 1000 (integer). Time dimension = drive + service. Count dimension = max_stops.
-- **planner.py** — Orchestrates scoring -> filtering -> matrix -> optimizer -> schedule -> artifacts. Generates per-stop `why_selected` explanations.
-- **visualize.py** — Folium map with AntPath animation, numbered stop markers (DivIcon), commentary panel, skipped wells as gray dots.
-- **utils.py** — Haversine, time formatting, output dirs.
+Single entrypoint (`POST /webhook/elevenlabs/query`) with intent detection:
 
-## Key design decisions
+### Data Intent (analytics questions)
+1. OpenAI LLM converts NL -> SQL (`llm_sql.py`)
+2. `sql_guard.py` validates SQL is read-only
+3. Execute on DuckDB, format voice-friendly response
 
-- Priority score replaces reward/money. Each component (prod, uplift, urgency, confidence, recency) is 0–100; weighted sum gives final 0–100 score.
-- Optimizer: minimizing "lost priority" via disjunction penalties = maximizing captured priority under constraints.
-- `scoring_breakdown` in response gives full transparency into why each well scored as it did.
-- Map auto-opens in browser on route plan. Static files served at `/outputs/`.
-- Deterministic: same inputs always produce same outputs (PATH_CHEAPEST_ARC + GUIDED_LOCAL_SEARCH).
+### Route Intent (visit planning questions)
+1. Fetch top-N wells from `well_priority_vw` in DuckDB
+2. OR-Tools solver maximizes priority_score under time/stop constraints (`optimizer.py`)
+3. Generate animated Folium map with TimestampedGeoJson (`visualize.py`)
+
+### Key: Routing agent never computes priority — it only optimizes based on DB scores.
+
+## Key Modules
+
+- `src/app.py` — FastAPI app with webhook endpoints + CORS
+- `src/esp_route_planner/database.py` — DuckDB seeding (~20 Delaware Basin wells), `well_priority_vw` view
+- `src/esp_route_planner/llm_sql.py` — NL-to-SQL via OpenAI (few-shot + schema)
+- `src/esp_route_planner/sql_guard.py` — SQL safety guard (blocks writes/DDL, enforces SELECT only)
+- `src/esp_route_planner/intent.py` — Route vs data intent detection via keyword matching
+- `src/esp_route_planner/webhook.py` — Orchestrates data/route handlers
+- `src/esp_route_planner/optimizer.py` — OR-Tools solver (disjunction penalty = priority_score * 1000)
+- `src/esp_route_planner/visualize.py` — Folium map with TimestampedGeoJson + AntPath + drive time labels
+- `src/esp_route_planner/schemas.py` — Pydantic v2 models
+- `src/esp_route_planner/travel_time.py` — Haversine travel time matrix
+- `src/esp_route_planner/scoring.py` — Priority formula (used by legacy /plan/route)
+
+## DuckDB Schema
+
+Tables: `wells`, `production_latest`, `reliability_flags_latest`, `ops_recommendations_latest`
+View: `well_priority_vw` — priority_score = 0.30*prod + 0.25*uplift + 0.25*urgency + 0.10*confidence + 0.10*recency
 
 ## Endpoints
 
-- `GET /health`
-- `POST /mock/generate` — Chevron-style synthetic wells (Permian Basin)
-- `POST /plan/route` — main optimizer (returns schedule, scoring breakdown, rationale, animated map)
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/health` | Health check |
+| POST | `/admin/seed` | Seed DuckDB |
+| POST | `/webhook/elevenlabs/query` | Main webhook (data or route) |
+| POST | `/webhook/elevenlabs/route` | Direct route (testing) |
+
+## Environment Variables
+
+- `OPENAI_API_KEY` — required for data queries (LLM-to-SQL)
+- `OPENAI_MODEL` — optional, defaults to `gpt-4o-mini`

@@ -3,7 +3,12 @@ __pycache__/
 *.egg-info/
 .venv/
 
+# Environment secrets
+.env
+
 # Generated artifacts (keep .gitkeep, ignore actual outputs)
 outputs/mock/*.json
 outputs/plans/*.json
 outputs/maps/*.html
+outputs/db/*.duckdb
+outputs/db/*.wal

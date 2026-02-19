@@ -30,5 +30,5 @@ def minutes_from_start(minutes: float) -> str:
 
 def ensure_output_dirs() -> None:
     """Create output sub-directories if they don't exist."""
-    for sub in ("mock", "plans", "maps"):
+    for sub in ("mock", "plans", "maps", "db"):
         (OUTPUTS_DIR / sub).mkdir(parents=True, exist_ok=True)
