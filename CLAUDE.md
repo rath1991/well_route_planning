@@ -60,3 +60,7 @@ View: `well_priority_vw` — priority_score = 0.30*prod + 0.25*uplift + 0.25*urg
 
 - `OPENAI_API_KEY` — required for data queries (LLM-to-SQL)
 - `OPENAI_MODEL` — optional, defaults to `gpt-4o-mini`
+
+## Git
+
+Do not add Co-Authored-By trailers to commit messages.
