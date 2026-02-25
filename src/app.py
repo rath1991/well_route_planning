@@ -6,6 +6,7 @@ NL query -> LLM-to-SQL or route planning.
 
 import logging
 import traceback
+import webbrowser
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -24,9 +25,17 @@ from esp_route_planner.intent import is_routing_intent
 from esp_route_planner.schemas import Location
 from esp_route_planner.utils import OUTPUTS_DIR, ensure_output_dirs
 from esp_route_planner.realtime_relay import relay_session
-from esp_route_planner.webhook import handle_data_query, handle_route_query
+from esp_route_planner.webhook import handle_data_query, handle_route_from_cached, handle_route_query
 
 logger = logging.getLogger(__name__)
+
+# In-memory store for the latest data query result (updated on every data query)
+_latest_result: dict = {}
+# Full data_preview from the most recent data query.
+# ElevenLabs sends two separate HTTP requests (data, then route); this bridges them.
+# The route endpoint uses this directly, supplementing from DB only for missing lat/lon.
+_last_data_preview: list[dict] = []
+_last_well_ids: list[str] = []  # kept for realtime relay compatibility
 
 ensure_output_dirs()
 
@@ -109,13 +118,28 @@ class WebhookQueryRequest(BaseModel):
     context: WebhookContext = Field(default_factory=WebhookContext)
 
 
+@app.get("/results")
+def results_page():
+    """Serve the persistent query-results window."""
+    return FileResponse(STATIC_DIR / "results.html")
+
+
+@app.get("/api/latest-result")
+def latest_result():
+    """Return the most recent data query result for the results page to poll."""
+    return _latest_result
+
+
 @app.post("/webhook/elevenlabs/query")
-def webhook_query(req: WebhookQueryRequest) -> dict:
+def webhook_query(req: WebhookQueryRequest, request: Request) -> dict:
     """Main ElevenLabs entrypoint — detects intent and routes accordingly."""
+    global _latest_result, _last_data_preview, _last_well_ids
+
     if not db_exists():
         raise HTTPException(status_code=400, detail="Database not seeded. Call POST /admin/seed first.")
 
-    base_url = "http://127.0.0.1:8000"
+    # Build base_url from the incoming request so ngrok / custom domains work
+    base_url = str(request.base_url).rstrip("/")
 
     if is_routing_intent(req.query):
         start = Location(
@@ -123,17 +147,62 @@ def webhook_query(req: WebhookQueryRequest) -> dict:
             lon=req.context.start_location.lon,
             name=req.context.start_location.name,
         )
-        return handle_route_query(
-            query=req.query,
-            start=start,
-            time_budget_minutes=req.context.time_budget_minutes,
-            max_stops=req.context.max_stops,
-            top_n_candidates=req.context.top_n_candidates,
-            must_visit_ids=req.context.must_visit_ids,
-            base_url=base_url,
-        )
+        # If the caller explicitly provides must_visit_ids, honour them.
+        # Otherwise use the full cached data_preview from the previous data query —
+        # coordinates are fetched from DB inside handle_route_from_cached if missing.
+        if req.context.must_visit_ids:
+            return handle_route_query(
+                query=req.query,
+                start=start,
+                time_budget_minutes=req.context.time_budget_minutes,
+                max_stops=req.context.max_stops,
+                top_n_candidates=req.context.top_n_candidates,
+                must_visit_ids=req.context.must_visit_ids,
+                base_url=base_url,
+            )
+        elif _last_data_preview:
+            logger.info("Using cached data_preview (%d rows) for routing", len(_last_data_preview))
+            return handle_route_from_cached(
+                cached_rows=_last_data_preview,
+                start=start,
+                time_budget_minutes=req.context.time_budget_minutes,
+                base_url=base_url,
+            )
+        else:
+            return handle_route_query(
+                query=req.query,
+                start=start,
+                time_budget_minutes=req.context.time_budget_minutes,
+                max_stops=req.context.max_stops,
+                top_n_candidates=req.context.top_n_candidates,
+                base_url=base_url,
+            )
     else:
-        return handle_data_query(query=req.query, base_url=base_url)
+        result = handle_data_query(query=req.query, base_url=base_url)
+
+        # Cache the full data_preview for follow-up route queries
+        try:
+            preview = result.get("data_preview") or []
+            if preview:
+                _last_data_preview = preview
+                _last_well_ids = [r["well_id"] for r in preview if "well_id" in r]
+                logger.info("Cached %d rows (%d with well_id) from data query",
+                            len(preview), len(_last_well_ids))
+        except Exception:
+            pass
+
+        results_url = f"{base_url}/results"
+
+        # Store for the polling page
+        _latest_result = {"query": req.query, **result}
+
+        # Open the results window every time — if the tab is already open it
+        # will update itself via polling; if it was closed this reopens it
+        webbrowser.open(results_url)
+
+        # Include URL in response so ngrok / remote clients can open it too
+        result["results_url"] = results_url
+        return result
 
 
 # ── Direct Route Webhook (for testing) ───────────────────────────────────
@@ -160,15 +229,33 @@ def webhook_route(req: DirectRouteRequest) -> dict:
         name=req.start_location.name,
     )
 
-    return handle_route_query(
-        query=req.query,
-        start=start,
-        time_budget_minutes=req.time_budget_minutes,
-        max_stops=req.max_stops,
-        top_n_candidates=req.top_n_candidates,
-        must_visit_ids=req.must_visit_ids,
-        base_url="http://127.0.0.1:8000",
-    )
+    if req.must_visit_ids:
+        return handle_route_query(
+            query=req.query,
+            start=start,
+            time_budget_minutes=req.time_budget_minutes,
+            max_stops=req.max_stops,
+            top_n_candidates=req.top_n_candidates,
+            must_visit_ids=req.must_visit_ids,
+            base_url="http://127.0.0.1:8000",
+        )
+    elif _last_data_preview:
+        logger.info("Route endpoint: using cached data_preview (%d rows)", len(_last_data_preview))
+        return handle_route_from_cached(
+            cached_rows=_last_data_preview,
+            start=start,
+            time_budget_minutes=req.time_budget_minutes,
+            base_url="http://127.0.0.1:8000",
+        )
+    else:
+        return handle_route_query(
+            query=req.query,
+            start=start,
+            time_budget_minutes=req.time_budget_minutes,
+            max_stops=req.max_stops,
+            top_n_candidates=req.top_n_candidates,
+            base_url="http://127.0.0.1:8000",
+        )
 
 
 # ── OpenAI Realtime Voice Agent ──────────────────────────────────────────

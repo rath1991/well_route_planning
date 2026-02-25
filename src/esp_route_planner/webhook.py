@@ -123,6 +123,81 @@ def _summarize_data_result(query: str, columns: list[str], rows: list[dict]) -> 
 # ── Route intent handler ─────────────────────────────────────────────────
 
 
+_WELL_COLS = """
+    SELECT well_id, name, lat, lon, oil_bpd, uplift_oil_bpd,
+           water_cut_pct, priority_score, prod_score, uplift_score,
+           urgency_score, confidence_score, recency_score,
+           issue_category, action_required, days_since_last_visit,
+           confidence
+    FROM well_priority_vw
+"""
+
+
+def handle_route_from_cached(
+    cached_rows: list[dict],
+    start: Location,
+    time_budget_minutes: int = 360,
+    base_url: str = "http://127.0.0.1:8000",
+) -> dict:
+    """Plan a route using the full output from a previous data query.
+
+    Uses cached_rows directly to identify which wells to visit.
+    If coordinates or routing fields are missing, performs a supplemental
+    SQL query using well names as the lookup key.
+    """
+    if not cached_rows:
+        return {
+            "mode": "route",
+            "spoken_text": "No cached query results to route. Run a data query first.",
+            "route_order": [], "schedule": [], "artifacts": {},
+        }
+
+    # Prefer well_id lookup; fall back to name-based lookup
+    well_ids = [r["well_id"] for r in cached_rows if r.get("well_id")]
+    well_names = [r["name"] for r in cached_rows if r.get("name") and not r.get("well_id")]
+
+    con = get_connection()
+    if well_ids:
+        ph = ", ".join("?" * len(well_ids))
+        candidates = con.execute(
+            _WELL_COLS + f" WHERE well_id IN ({ph})", well_ids
+        ).fetchall()
+    elif well_names:
+        # Supplemental query: extract routing data using well names as placeholder
+        ph = ", ".join("?" * len(well_names))
+        candidates = con.execute(
+            _WELL_COLS + f" WHERE name IN ({ph})", well_names
+        ).fetchall()
+    else:
+        con.close()
+        return {
+            "mode": "route",
+            "spoken_text": "Could not identify wells from the cached results.",
+            "route_order": [], "schedule": [], "artifacts": {},
+        }
+    con.close()
+
+    if not candidates:
+        return {
+            "mode": "route",
+            "spoken_text": "None of the cached wells were found in the database.",
+            "route_order": [], "schedule": [], "artifacts": {},
+        }
+
+    # Extract the well_ids resolved from DB and delegate to the core route handler.
+    # This guarantees all routing fields (lat/lon, scores) come from the DB,
+    # while the set of wells to visit exactly matches what was shown to the user.
+    resolved_ids = [c[0] for c in candidates]  # well_id is first column
+    return handle_route_query(
+        query="plan route to selected wells",
+        start=start,
+        time_budget_minutes=time_budget_minutes,
+        max_stops=len(resolved_ids),  # attempt to visit all cached wells
+        must_visit_ids=resolved_ids,
+        base_url=base_url,
+    )
+
+
 def handle_route_query(
     query: str,
     start: Location,
@@ -137,21 +212,22 @@ def handle_route_query(
     end = end or start
     must_visit_ids = must_visit_ids or []
 
-    # Fetch top candidates from DB
     con = get_connection()
-    candidates = con.execute(
-        """
-        SELECT well_id, name, lat, lon, oil_bpd, uplift_oil_bpd,
-               water_cut_pct, priority_score, prod_score, uplift_score,
-               urgency_score, confidence_score, recency_score,
-               issue_category, action_required, days_since_last_visit,
-               confidence
-        FROM well_priority_vw
-        ORDER BY priority_score DESC
-        LIMIT ?
-        """,
-        [top_n_candidates],
-    ).fetchall()
+
+    if must_visit_ids:
+        # Explicit wells specified: fetch exactly those wells, visit all of them
+        placeholders = ", ".join("?" * len(must_visit_ids))
+        candidates = con.execute(
+            _WELL_COLS + f" WHERE well_id IN ({placeholders})",
+            must_visit_ids,
+        ).fetchall()
+    else:
+        # Default: fetch top-N candidates by priority score
+        candidates = con.execute(
+            _WELL_COLS + " ORDER BY priority_score DESC LIMIT ?",
+            [top_n_candidates],
+        ).fetchall()
+
     con.close()
 
     if not candidates:
@@ -202,10 +278,13 @@ def handle_route_query(
         for w in wells
     ]
 
-    must_indices = [
-        i for i, w in enumerate(wells)
-        if w["well_id"] in set(must_visit_ids)
-    ]
+    if must_visit_ids:
+        # All fetched wells are the user's explicit selection — visit every one
+        must_indices = list(range(len(wells)))
+        effective_max_stops = len(wells)
+    else:
+        must_indices = []
+        effective_max_stops = max_stops
 
     # Build travel time matrix
     time_matrix = build_time_matrix(start, end, schema_wells, avg_speed_kmph=45)
@@ -217,7 +296,7 @@ def handle_route_query(
         priority_scores=priority_scores,
         service_times=service_times,
         must_visit_indices=must_indices,
-        max_stops=max_stops,
+        max_stops=effective_max_stops,
         time_budget_minutes=time_budget_minutes,
     )
 
@@ -307,18 +386,39 @@ def handle_route_query(
     plan_path.write_text(json.dumps(plan_data, indent=2), encoding="utf-8")
     plan_url = f"{base_url}/outputs/plans/plan_{ts}.json"
 
-    # Auto-open the animated map in a local browser window
-    webbrowser.open(f"file://{map_path}")
+    # Open the animated map in the local browser
+    webbrowser.open(map_url)
 
     total_priority = sum(priority_scores[i] for i in result.visited_indices)
+    n_visited = len(result.visited_indices)
+    n_total = len(wells)
+    n_skipped = n_total - n_visited
+
+    if n_skipped > 0 and must_visit_ids:
+        # User explicitly selected wells but not all fit in the time budget
+        skipped_names = [
+            wells[i]["name"]
+            for i in range(n_total)
+            if i not in result.visited_indices
+        ]
+        skip_msg = (
+            f" {n_skipped} well{'s' if n_skipped > 1 else ''} from your selection "
+            f"could not fit in the {time_budget_minutes}-minute budget "
+            f"({', '.join(skipped_names[:3])}{'…' if n_skipped > 3 else ''}). "
+            f"Increase time_budget_minutes to include more."
+        )
+    else:
+        skip_msg = ""
+
     spoken = (
-        f"I planned a route visiting {len(result.visited_indices)} wells "
-        f"with total priority score {total_priority:.0f}. "
+        f"I planned a route visiting {n_visited} "
+        f"{'of your ' + str(n_total) + ' selected ' if must_visit_ids else ''}"
+        f"wells with total priority score {total_priority:.0f}. "
         f"Total time: {elapsed:.0f} minutes ({total_drive:.0f} driving, "
         f"{total_service:.0f} service). "
         f"Top stop: {wells[result.visited_indices[0]]['name']} "
-        f"with priority {wells[result.visited_indices[0]]['priority_score']:.0f}. "
-        f"I've generated an animated map you can view."
+        f"with priority {wells[result.visited_indices[0]]['priority_score']:.0f}."
+        f"{skip_msg}"
     )
 
     return {

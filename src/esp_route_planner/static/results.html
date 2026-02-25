@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP Query Results</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f172a; color: #e2e8f0; min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  .header {
+    background: #0f2744; padding: 14px 24px;
+    display: flex; align-items: center; gap: 12px;
+    border-bottom: 1px solid #1e3a5f;
+    position: sticky; top: 0; z-index: 10;
+  }
+  .header-icon { font-size: 1.3rem; }
+  .header-query {
+    flex: 1; font-size: 0.95rem; font-weight: 600; color: #e2e8f0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .header-meta { font-size: 0.75rem; color: #64748b; white-space: nowrap; }
+  .badge {
+    background: #1e3a5f; color: #7dd3fc;
+    font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+    padding: 3px 10px; border-radius: 999px;
+  }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #22c55e; flex-shrink: 0;
+    animation: blink 2s ease-in-out infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  /* ── Empty state ── */
+  .empty-state {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; height: calc(100vh - 56px);
+    color: #334155; text-align: center; gap: 12px;
+  }
+  .empty-state .icon { font-size: 3rem; }
+  .empty-state p { font-size: 0.9rem; }
+
+  /* ── SQL section ── */
+  .sql-wrap { border-bottom: 1px solid #1e293b; }
+  .sql-toggle {
+    width: 100%; background: none; border: none; cursor: pointer;
+    padding: 11px 24px; display: flex; align-items: center; gap: 8px;
+    color: #94a3b8; font-size: 0.82rem; font-weight: 600;
+    font-family: inherit; text-align: left;
+  }
+  .sql-toggle:hover { background: #162032; color: #e2e8f0; }
+  .arrow { font-size: 0.65rem; transition: transform .2s; display: inline-block; }
+  .sql-toggle.open .arrow { transform: rotate(90deg); }
+  .sql-body { display: none; padding: 14px 24px 18px; background: #0a1628; }
+  .sql-body.visible { display: block; }
+  pre {
+    font-family: 'Fira Code', 'Cascadia Code', Consolas, monospace;
+    font-size: 0.82rem; line-height: 1.6; color: #7dd3fc;
+    white-space: pre-wrap; word-break: break-word;
+  }
+
+  /* ── Table section ── */
+  .table-wrap { padding: 20px 24px 32px; }
+  .table-meta { font-size: 0.75rem; color: #64748b; margin-bottom: 12px; }
+  .scroll { overflow-x: auto; border-radius: 8px; border: 1px solid #1e293b; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th {
+    background: #0f2744; color: #94a3b8;
+    padding: 10px 14px; text-align: left;
+    font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .04em; white-space: nowrap;
+    border-bottom: 1px solid #1e3a5f;
+  }
+  td {
+    padding: 9px 14px; border-bottom: 1px solid #1a2840;
+    color: #cbd5e1; white-space: nowrap;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #162032; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; color: #7dd3fc; }
+  td.hi  { color: #f97316; font-weight: 600; }
+  td.empty { text-align: center; color: #475569; padding: 28px; }
+</style>
+</head>
+<body>
+
+<!-- Header injected by JS -->
+<div id="root"></div>
+
+<script>
+let lastSql = null; // track last SQL to detect new results
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function fmtCol(c) {
+  return c.replace(/_/g,' ').replace(/\b\w/g, x => x.toUpperCase());
+}
+function fmtCell(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  if (typeof v === 'number') return Number.isInteger(v) ? v : v.toFixed(1);
+  return esc(String(v));
+}
+function isNumCol(c) {
+  return ['oil_bpd','liquid_bpd','water_cut_pct','uplift_oil_bpd','priority_score',
+          'prod_score','uplift_score','urgency_score','confidence_score','recency_score',
+          'confidence','days_since_last_visit','restarts_7d','vsd_trips_7d'].includes(c);
+}
+function isHiCol(c, v) {
+  return (c === 'water_cut_pct' && v > 70) || (c === 'priority_score' && v > 75);
+}
+
+function render(data) {
+  const root = document.getElementById('root');
+
+  if (!data || !data.mode) {
+    root.innerHTML = `
+      <div class="empty-state">
+        <div class="icon">⛽</div>
+        <p>Waiting for a query…<br>Ask George an analytics question to see results here.</p>
+      </div>`;
+    return;
+  }
+
+  const query   = data.query || 'Query Results';
+  const sql     = data.sql || '';
+  const rows    = data.data_preview || [];
+  const cols    = rows.length ? Object.keys(rows[0]) : [];
+  const ts      = new Date().toLocaleTimeString();
+
+  const tbodyHtml = rows.length
+    ? rows.map(row =>
+        '<tr>' + cols.map(c => {
+          const v   = row[c];
+          const cls = isNumCol(c) ? ' class="num"' : (isHiCol(c,v) ? ' class="hi"' : '');
+          return `<td${cls}>${fmtCell(v)}</td>`;
+        }).join('') + '</tr>'
+      ).join('')
+    : `<tr><td colspan="${cols.length || 1}" class="empty">No results returned</td></tr>`;
+
+  root.innerHTML = `
+    <div class="header">
+      <div class="dot" title="Live — updates automatically"></div>
+      <span class="header-icon">⛽</span>
+      <span class="header-query" title="${esc(query)}">${esc(query)}</span>
+      <span class="badge">data</span>
+      <span class="header-meta">${ts} &nbsp;·&nbsp; ${rows.length} row${rows.length!==1?'s':''}</span>
+    </div>
+
+    ${sql ? `
+    <div class="sql-wrap">
+      <button class="sql-toggle" id="sql-btn" onclick="toggleSql()">
+        <span class="arrow" id="sql-arrow">▶</span> View SQL Query
+      </button>
+      <div class="sql-body" id="sql-body">
+        <pre>${esc(sql)}</pre>
+      </div>
+    </div>` : ''}
+
+    <div class="table-wrap">
+      <div class="table-meta">${rows.length} result${rows.length!==1?'s':''} returned</div>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>${cols.map(c => `<th>${fmtCol(c)}</th>`).join('')}</tr>
+          </thead>
+          <tbody>${tbodyHtml}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function toggleSql() {
+  document.getElementById('sql-btn').classList.toggle('open');
+  document.getElementById('sql-body').classList.toggle('visible');
+}
+
+async function poll() {
+  try {
+    const res  = await fetch('/api/latest-result');
+    const data = await res.json();
+    // Re-render only when the query/SQL changes
+    const key = data.sql || data.query || '';
+    if (key !== lastSql) {
+      lastSql = key;
+      render(data);
+    }
+  } catch (e) {
+    console.warn('Poll error:', e);
+  }
+}
+
+// Initial render + start polling every 2 seconds
+render(null);
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

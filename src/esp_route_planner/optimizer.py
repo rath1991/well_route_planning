@@ -109,6 +109,11 @@ def solve_route(
     # ── Disjunctions (optional nodes with priority-based penalty) ────────
     # Penalty = priority lost by *not* visiting.  Large penalty → must-visit.
     # Scale priority (0–100) by 1000 for integer granularity.
+    #
+    # Must-visit wells (user's explicit selection) use a flat BIG_PENALTY so
+    # the solver treats them all as equally important and visits as many as
+    # possible within the time budget — it does NOT filter by priority score
+    # within the selection (that filtering was already done by the data query).
     must_visit_set = set(must_visit_indices)
     BIG_PENALTY = 10_000_000
 
@@ -118,7 +123,7 @@ def solve_route(
         if well_idx in must_visit_set:
             penalty = BIG_PENALTY
         else:
-            penalty = int(priority_scores[well_idx] * 1000)
+            penalty = int(priority_scores[well_idx] * 1_000)
         routing.AddDisjunction([index], penalty)
 
     # ── Solver parameters (deterministic) ────────────────────────────────

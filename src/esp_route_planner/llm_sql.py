@@ -68,7 +68,8 @@ def nl_to_sql(query: str, schema: str) -> str:
         "- Use only the tables and views described in the schema below.\n"
         "- Always include a reasonable LIMIT (max 50) unless counting/aggregating.\n"
         "- Use the well_priority_vw view when the question involves priority scores or ranking.\n"
-        "- DuckDB syntax: use STRING_AGG, ROUND, LEAST, GREATEST etc.\n\n"
+        "- DuckDB syntax: use STRING_AGG, ROUND, LEAST, GREATEST etc.\n"
+        "- When the query returns individual well records (not aggregates/counts), always include well_id as the FIRST column in SELECT.\n\n"
         f"Schema:\n{schema}\n\n"
         f"Few-shot examples:\n{_FEW_SHOT_EXAMPLES}"
     )

@@ -5,10 +5,16 @@ from __future__ import annotations
 import re
 
 _ROUTE_KEYWORDS = [
-    r"\broute\b", r"\bvisit\b", r"\bplan my day\b", r"\bstops?\b",
-    r"\bschedule\b", r"\bdrive\b", r"\bhours?\b", r"\btravel\b",
-    r"\boptimize.*visit", r"\bfield trip\b", r"\bitinerary\b",
-    r"\bplan.*route\b", r"\bwhere should i go\b",
+    r"\broute\b",
+    r"\bvisit\b",
+    r"\bplan my day\b",
+    r"\bfield trip\b",
+    r"\bitinerary\b",
+    r"\boptimize.*visit",
+    r"\bplan.*route\b",
+    r"\bwhere should i go\b",
+    r"\bplan my (?:visits?|stops?|trip)\b",
+    r"\bgo.*(?:these|those|the) wells?\b",
 ]
 
 _ROUTE_PATTERN = re.compile("|".join(_ROUTE_KEYWORDS), re.IGNORECASE)

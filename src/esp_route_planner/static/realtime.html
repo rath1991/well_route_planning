@@ -12,17 +12,18 @@
     display: flex; flex-direction: column; align-items: center;
     min-height: 100vh; padding: 2rem;
   }
-  h1 { font-size: 1.8rem; margin-bottom: 0.3rem; color: #38bdf8; }
-  .subtitle { color: #94a3b8; margin-bottom: 2rem; font-size: 0.9rem; }
+  h1 { font-size: 1.8rem; color: #38bdf8; }
+  .subtitle { color: #94a3b8; margin-bottom: 1.5rem; font-size: 0.9rem; margin-top: 0.2rem; }
+
   #status {
     padding: 0.5rem 1.2rem; border-radius: 999px; font-size: 0.85rem;
-    margin-bottom: 1.5rem; font-weight: 500;
+    margin-bottom: 1.5rem; font-weight: 500; display: inline-block;
   }
   .status-disconnected { background: #1e293b; color: #94a3b8; }
-  .status-connecting  { background: #1e3a5f; color: #7dd3fc; }
-  .status-connected   { background: #064e3b; color: #6ee7b7; }
-  .status-speaking    { background: #4c1d95; color: #c4b5fd; }
-  .status-error       { background: #450a0a; color: #fca5a5; }
+  .status-connecting   { background: #1e3a5f; color: #7dd3fc; }
+  .status-connected    { background: #064e3b; color: #6ee7b7; }
+  .status-speaking     { background: #4c1d95; color: #c4b5fd; }
+  .status-error        { background: #450a0a; color: #fca5a5; }
 
   #btn-connect {
     width: 120px; height: 120px; border-radius: 50%; border: none;
@@ -34,355 +35,391 @@
     background: linear-gradient(135deg, #1e40af, #3b82f6);
     color: white; box-shadow: 0 0 30px rgba(59,130,246,0.3);
   }
-  #btn-connect.off:hover {
-    box-shadow: 0 0 50px rgba(59,130,246,0.5);
-    transform: scale(1.05);
-  }
+  #btn-connect.off:hover { box-shadow: 0 0 50px rgba(59,130,246,0.5); transform: scale(1.05); }
   #btn-connect.on {
     background: linear-gradient(135deg, #dc2626, #ef4444);
     color: white; box-shadow: 0 0 30px rgba(239,68,68,0.3);
     animation: pulse 2s infinite;
   }
   @keyframes pulse {
-    0%, 100% { box-shadow: 0 0 30px rgba(239,68,68,0.3); }
-    50% { box-shadow: 0 0 50px rgba(239,68,68,0.5); }
+    0%,100% { box-shadow: 0 0 30px rgba(239,68,68,0.3); }
+    50%      { box-shadow: 0 0 50px rgba(239,68,68,0.5); }
   }
 
   #transcript {
-    width: 100%; max-width: 700px; flex: 1;
+    width: 100%; max-width: 700px;
     background: #1e293b; border-radius: 12px;
-    padding: 1.5rem; overflow-y: auto;
-    max-height: 50vh; margin-bottom: 1rem;
+    padding: 1.5rem; overflow-y: auto; max-height: 50vh; margin-bottom: 1rem;
   }
   .msg { margin-bottom: 1rem; padding: 0.8rem; border-radius: 8px; }
-  .msg-user { background: #1e3a5f; border-left: 3px solid #3b82f6; }
+  .msg-user      { background: #1e3a5f; border-left: 3px solid #3b82f6; }
   .msg-assistant { background: #1a2e1a; border-left: 3px solid #22c55e; }
-  .msg-system { background: #2d2215; border-left: 3px solid #f59e0b; font-size: 0.85rem; }
-  .msg-label {
-    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em;
-    margin-bottom: 0.3rem; font-weight: 600;
-  }
-  .msg-user .msg-label { color: #60a5fa; }
+  .msg-system    { background: #2d2215; border-left: 3px solid #f59e0b; font-size: 0.85rem; }
+  .msg-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem; font-weight: 600; }
+  .msg-user .msg-label      { color: #60a5fa; }
   .msg-assistant .msg-label { color: #4ade80; }
-  .msg-system .msg-label { color: #fbbf24; }
+  .msg-system .msg-label    { color: #fbbf24; }
   .msg-text { font-size: 0.95rem; line-height: 1.5; }
 
   #visualizer {
     width: 100%; max-width: 700px; height: 60px;
     background: #1e293b; border-radius: 8px; margin-bottom: 1rem;
   }
-
   .hint { color: #64748b; font-size: 0.8rem; text-align: center; max-width: 500px; }
 </style>
 </head>
 <body>
   <h1>George</h1>
   <p class="subtitle">ESP Field Engineer Voice Assistant</p>
-
   <div id="status" class="status-disconnected">Disconnected</div>
-
   <canvas id="visualizer"></canvas>
-
   <button id="btn-connect" class="off" onclick="toggleConnection()">Connect</button>
-
   <div id="transcript"></div>
-
-  <p class="hint">
-    Try: "Which wells have high water cut?" or "Plan my visits for 6 hours, max 6 stops"
-  </p>
+  <p class="hint">Try: "Which wells have high water cut?" · "Plan my visit to those wells"</p>
 
 <script>
 const SAMPLE_RATE = 24000;
-let ws = null;
+let ws = null, micCtx = null, playCtx = null, micStream = null, micProcessor = null;
+let nextPlayTime = 0, canvasCtx = null, analyser = null, isSpeaking = false;
+let dataWin = null; // the persistent results popup window
 
-// Separate audio contexts: mic and playback never share a context
-// This lets the browser's echo canceller work properly
-let micCtx = null;
-let playCtx = null;
-let micStream = null;
-let micProcessor = null;
-let nextPlayTime = 0;
-let canvasCtx = null;
-let analyser = null;
-let isSpeaking = false;  // true while George is speaking — stops mic data going to OpenAI
-
-const btnConnect = document.getElementById('btn-connect');
-const statusEl = document.getElementById('status');
+const btnConnect   = document.getElementById('btn-connect');
+const statusEl     = document.getElementById('status');
 const transcriptEl = document.getElementById('transcript');
-const canvas = document.getElementById('visualizer');
+const canvas       = document.getElementById('visualizer');
 
-// --- Audio Visualizer ---
+// ── Visualizer ───────────────────────────────────────────────────────────
 function initVisualizer() {
   canvasCtx = canvas.getContext('2d');
-  canvas.width = canvas.offsetWidth * 2;
+  canvas.width  = canvas.offsetWidth * 2;
   canvas.height = canvas.offsetHeight * 2;
   canvasCtx.scale(2, 2);
   drawVisualizer();
 }
-
 function drawVisualizer() {
   if (!canvasCtx) return;
   const w = canvas.offsetWidth, h = canvas.offsetHeight;
   canvasCtx.fillStyle = '#1e293b';
   canvasCtx.fillRect(0, 0, w, h);
-
   if (analyser) {
     const data = new Uint8Array(analyser.frequencyBinCount);
     analyser.getByteFrequencyData(data);
-    const barW = w / data.length * 2.5;
+    const bw = w / data.length * 2.5;
     for (let i = 0; i < data.length; i++) {
-      const barH = (data[i] / 255) * h * 0.9;
-      const hue = 200 + (data[i] / 255) * 60;
-      canvasCtx.fillStyle = `hsl(${hue}, 80%, ${40 + data[i]/255*30}%)`;
-      canvasCtx.fillRect(i * barW, h - barH, barW - 1, barH);
+      const bh = (data[i] / 255) * h * 0.9;
+      canvasCtx.fillStyle = `hsl(${200 + (data[i]/255)*60}, 80%, ${40+data[i]/255*30}%)`;
+      canvasCtx.fillRect(i * bw, h - bh, bw - 1, bh);
     }
   }
   requestAnimationFrame(drawVisualizer);
 }
 
-// --- Status ---
-function setStatus(text, cls) {
-  statusEl.textContent = text;
-  statusEl.className = `status-${cls}`;
-}
-
-// --- Transcript ---
+// ── Status / Transcript ──────────────────────────────────────────────────
+function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = `status-${cls}`; }
 function addMessage(role, text) {
-  const div = document.createElement('div');
-  div.className = `msg msg-${role}`;
-  div.innerHTML = `<div class="msg-label">${role}</div><div class="msg-text">${text}</div>`;
-  transcriptEl.appendChild(div);
+  const d = document.createElement('div');
+  d.className = `msg msg-${role}`;
+  d.innerHTML = `<div class="msg-label">${role}</div><div class="msg-text">${esc(text)}</div>`;
+  transcriptEl.appendChild(d);
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 }
-
-// --- WebSocket ---
-function toggleConnection() {
-  if (ws) { disconnect(); } else { connect(); }
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+
+// ── WebSocket ────────────────────────────────────────────────────────────
+function toggleConnection() { ws ? disconnect() : connect(); }
 
 async function connect() {
   setStatus('Connecting...', 'connecting');
   btnConnect.textContent = '...';
-
   try {
-    // Get microphone with echo cancellation + noise suppression + auto gain
     micStream = await navigator.mediaDevices.getUserMedia({ audio: {
-      sampleRate: SAMPLE_RATE,
-      channelCount: 1,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
+      sampleRate: SAMPLE_RATE, channelCount: 1,
+      echoCancellation: true, noiseSuppression: true, autoGainControl: true,
     }});
-
-    // Mic context — only for capturing microphone input
-    micCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
-
-    // Playback context — completely separate, only for speaker output
+    micCtx  = new AudioContext({ sampleRate: SAMPLE_RATE });
     playCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
     analyser = playCtx.createAnalyser();
     analyser.fftSize = 256;
     analyser.connect(playCtx.destination);
 
-    // Connect WebSocket
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/ws/realtime`);
-
     ws.onopen = () => {
-      setStatus('Connected - Speak now', 'connected');
-      btnConnect.textContent = 'Stop';
-      btnConnect.className = 'on';
+      setStatus('Connected — speak now', 'connected');
+      btnConnect.textContent = 'Stop'; btnConnect.className = 'on';
       addMessage('system', 'Connected to George. You can start speaking.');
       startMicCapture();
     };
-
-    ws.onmessage = (evt) => handleServerEvent(JSON.parse(evt.data));
-
-    ws.onerror = (err) => {
-      console.error('WebSocket error:', err);
-      setStatus('Connection error', 'error');
-      addMessage('system', 'Connection error. Try reconnecting.');
-    };
-
-    ws.onclose = () => {
+    ws.onmessage = e => handleServerEvent(JSON.parse(e.data));
+    ws.onerror   = e => { console.error(e); setStatus('Connection error', 'error'); };
+    ws.onclose   = () => {
       setStatus('Disconnected', 'disconnected');
-      btnConnect.textContent = 'Connect';
-      btnConnect.className = 'off';
-      stopMicCapture();
-      ws = null;
+      btnConnect.textContent = 'Connect'; btnConnect.className = 'off';
+      stopMicCapture(); ws = null;
     };
-
   } catch (err) {
-    console.error('Connect error:', err);
+    console.error(err);
     setStatus('Error: ' + err.message, 'error');
     addMessage('system', 'Failed to connect: ' + err.message);
-    btnConnect.textContent = 'Connect';
-    btnConnect.className = 'off';
+    btnConnect.textContent = 'Connect'; btnConnect.className = 'off';
   }
 }
-
 function disconnect() {
   if (ws) { ws.close(); ws = null; }
   stopMicCapture();
   setStatus('Disconnected', 'disconnected');
-  btnConnect.textContent = 'Connect';
-  btnConnect.className = 'off';
+  btnConnect.textContent = 'Connect'; btnConnect.className = 'off';
 }
 
-// --- Microphone Capture (PCM16 @ 24kHz) ---
-// Uses its own AudioContext (micCtx) so it never touches playback audio
+// ── Mic ──────────────────────────────────────────────────────────────────
 function startMicCapture() {
   if (!micCtx || !micStream) return;
-  const source = micCtx.createMediaStreamSource(micStream);
-
+  const src = micCtx.createMediaStreamSource(micStream);
   micProcessor = micCtx.createScriptProcessor(4096, 1, 1);
-  micProcessor.onaudioprocess = (e) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    // Don't send mic audio while George is speaking — prevents OpenAI VAD
-    // from treating speaker bleed as new user speech
-    if (isSpeaking) return;
-    const float32 = e.inputBuffer.getChannelData(0);
-    const pcm16 = float32ToPcm16(float32);
-    const b64 = arrayBufferToBase64(pcm16.buffer);
-
-    ws.send(JSON.stringify({
-      type: 'input_audio_buffer.append',
-      audio: b64,
-    }));
+  micProcessor.onaudioprocess = e => {
+    if (!ws || ws.readyState !== WebSocket.OPEN || isSpeaking) return;
+    ws.send(JSON.stringify({ type: 'input_audio_buffer.append',
+      audio: toBase64(float32ToPcm16(e.inputBuffer.getChannelData(0)).buffer) }));
   };
-
-  source.connect(micProcessor);
-  // Connect to a silent destination so ScriptProcessor fires events
-  const silentGain = micCtx.createGain();
-  silentGain.gain.value = 0;
-  micProcessor.connect(silentGain);
-  silentGain.connect(micCtx.destination);
+  src.connect(micProcessor);
+  const g = micCtx.createGain(); g.gain.value = 0;
+  micProcessor.connect(g); g.connect(micCtx.destination);
 }
-
 function stopMicCapture() {
-  if (micProcessor) { micProcessor.disconnect(); micProcessor = null; }
-  if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
-  if (micCtx) { micCtx.close(); micCtx = null; }
-  if (playCtx) { playCtx.close(); playCtx = null; analyser = null; }
+  micProcessor?.disconnect(); micProcessor = null;
+  micStream?.getTracks().forEach(t => t.stop()); micStream = null;
+  micCtx?.close();  micCtx  = null;
+  playCtx?.close(); playCtx = null; analyser = null;
 }
 
-// --- PCM Conversion ---
-function float32ToPcm16(float32) {
-  const pcm16 = new Int16Array(float32.length);
-  for (let i = 0; i < float32.length; i++) {
-    const s = Math.max(-1, Math.min(1, float32[i]));
-    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-  }
-  return pcm16;
+// ── PCM / Base64 ─────────────────────────────────────────────────────────
+function float32ToPcm16(f32) {
+  const out = new Int16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) { const s = Math.max(-1,Math.min(1,f32[i])); out[i] = s<0?s*0x8000:s*0x7FFF; }
+  return out;
+}
+function toBase64(buf) {
+  const b = new Uint8Array(buf); let s=''; for (let i=0;i<b.byteLength;i++) s+=String.fromCharCode(b[i]); return btoa(s);
+}
+function fromBase64(b64) {
+  const s=atob(b64), b=new Uint8Array(s.length); for(let i=0;i<s.length;i++) b[i]=s.charCodeAt(i); return b.buffer;
 }
 
-function arrayBufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-}
-
-function base64ToArrayBuffer(base64) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes.buffer;
-}
-
-// --- Audio Playback ---
-// Uses playCtx (separate from mic) so speaker output can't feed back into mic capture
-function playAudioChunk(base64Audio) {
+// ── Playback ─────────────────────────────────────────────────────────────
+function playAudioChunk(b64) {
   if (!playCtx) return;
-  const pcmBuffer = base64ToArrayBuffer(base64Audio);
-  const int16 = new Int16Array(pcmBuffer);
-  const float32 = new Float32Array(int16.length);
-  for (let i = 0; i < int16.length; i++) {
-    float32[i] = int16[i] / 0x8000;
-  }
-
-  const audioBuffer = playCtx.createBuffer(1, float32.length, SAMPLE_RATE);
-  audioBuffer.getChannelData(0).set(float32);
-
-  const source = playCtx.createBufferSource();
-  source.buffer = audioBuffer;
-  source.connect(analyser);  // analyser is already connected to playCtx.destination
-
+  const i16 = new Int16Array(fromBase64(b64));
+  const f32 = new Float32Array(i16.length);
+  for (let i=0; i<i16.length; i++) f32[i] = i16[i]/0x8000;
+  const buf = playCtx.createBuffer(1, f32.length, SAMPLE_RATE);
+  buf.getChannelData(0).set(f32);
+  const src = playCtx.createBufferSource();
+  src.buffer = buf; src.connect(analyser);
   const now = playCtx.currentTime;
   if (nextPlayTime < now) nextPlayTime = now;
-  source.start(nextPlayTime);
-  nextPlayTime += audioBuffer.duration;
+  src.start(nextPlayTime); nextPlayTime += buf.duration;
 }
 
-// --- Handle OpenAI Events ---
+// ── OpenAI Events ────────────────────────────────────────────────────────
 let currentAssistantText = '';
-
-function handleServerEvent(event) {
-  const t = event.type;
-
-  switch (t) {
+function handleServerEvent(ev) {
+  switch (ev.type) {
     case 'session.created':
-      addMessage('system', 'Session ready. Voice: ' + (event.session?.voice || 'ash'));
+      addMessage('system', 'Session ready. Voice: ' + (ev.session?.voice || 'ash'));
       break;
-
     case 'response.audio.delta':
-      if (event.delta) {
-        isSpeaking = true;
-        setStatus('George is speaking...', 'speaking');
-        playAudioChunk(event.delta);
-      }
+      if (ev.delta) { isSpeaking = true; setStatus('George is speaking...', 'speaking'); playAudioChunk(ev.delta); }
       break;
-
     case 'response.audio_transcript.delta':
-      currentAssistantText += (event.delta || '');
+      currentAssistantText += (ev.delta || '');
       break;
-
     case 'response.audio_transcript.done':
-      if (currentAssistantText) {
-        addMessage('assistant', currentAssistantText);
-        currentAssistantText = '';
-      }
-      setStatus('Connected - Speak now', 'connected');
+      if (currentAssistantText) { addMessage('assistant', currentAssistantText); currentAssistantText = ''; }
+      setStatus('Connected — speak now', 'connected');
       break;
-
     case 'conversation.item.input_audio_transcription.completed':
-      if (event.transcript) {
-        addMessage('user', event.transcript);
-      }
+      if (ev.transcript) addMessage('user', ev.transcript);
       break;
-
     case 'response.function_call_arguments.done':
-      isSpeaking = true;  // mute mic during tool execution + response
-      addMessage('system', `Calling ${event.name}...`);
-      setStatus('Processing query...', 'connecting');
+      isSpeaking = true;
+      addMessage('system', `Calling ${ev.name}…`);
+      setStatus('Processing…', 'connecting');
       break;
-
+    case 'tool.result':
+      handleToolResult(ev.name, ev.query || '', ev.result);
+      break;
     case 'response.done':
-      // Wait a brief moment for audio to finish playing, then re-enable mic
       setTimeout(() => { isSpeaking = false; }, 500);
-      setStatus('Connected - Speak now', 'connected');
+      setStatus('Connected — speak now', 'connected');
       nextPlayTime = 0;
       break;
-
     case 'error':
-      const errMsg = event.error?.message || JSON.stringify(event.error);
-      addMessage('system', 'Error: ' + errMsg);
+      addMessage('system', 'Error: ' + (ev.error?.message || JSON.stringify(ev.error)));
       setStatus('Error', 'error');
       break;
-
     case 'input_audio_buffer.speech_started':
-      isSpeaking = false;  // user is interrupting — re-enable mic
-      setStatus('Listening...', 'connected');
-      nextPlayTime = 0;
+      isSpeaking = false; setStatus('Listening…', 'connected'); nextPlayTime = 0;
       break;
-
     case 'input_audio_buffer.speech_stopped':
-      setStatus('Processing...', 'connecting');
+      setStatus('Processing…', 'connecting');
       break;
   }
+}
+
+// ── Results Popup Window ─────────────────────────────────────────────────
+function handleToolResult(toolName, query, result) {
+  if (result.mode === 'data') {
+    openDataWindow(query, result);
+  }
+  // Route results open via webbrowser.open() on the server side (animated map)
+}
+
+function openDataWindow(query, result) {
+  const rows = result.data_preview || [];
+  const sql  = result.sql || '';
+  const ts   = new Date().toLocaleTimeString();
+
+  // Build column headers from first row
+  const cols = rows.length ? Object.keys(rows[0]) : [];
+
+  // Build table rows HTML
+  const tbodyHtml = rows.length
+    ? rows.map(row =>
+        '<tr>' + cols.map(c => {
+          const v = row[c];
+          const isNum = isNumCol(c);
+          const isHi  = isHiCol(c, v);
+          const cls   = isNum ? ' class="num"' : (isHi ? ' class="hi"' : '');
+          return `<td${cls}>${fmtCell(v)}</td>`;
+        }).join('') + '</tr>'
+      ).join('')
+    : `<tr><td colspan="${cols.length || 1}" class="empty">No results</td></tr>`;
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Query Results</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+       background:#0f172a;color:#e2e8f0;padding:0;min-height:100vh}
+
+  /* ── Header bar ── */
+  .header{background:#0f2744;padding:14px 20px;display:flex;align-items:center;
+          gap:12px;border-bottom:1px solid #1e3a5f;position:sticky;top:0;z-index:10}
+  .header-icon{font-size:1.2rem}
+  .header-query{flex:1;font-size:0.9rem;font-weight:600;color:#e2e8f0;
+                white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .header-meta{font-size:0.75rem;color:#64748b;white-space:nowrap}
+  .badge{background:#1e3a5f;color:#7dd3fc;font-size:0.7rem;font-weight:700;
+         text-transform:uppercase;padding:3px 9px;border-radius:999px}
+
+  /* ── SQL section ── */
+  .sql-wrap{border-bottom:1px solid #1e293b}
+  .sql-toggle{width:100%;background:none;border:none;cursor:pointer;
+              padding:10px 20px;display:flex;align-items:center;gap:8px;
+              color:#94a3b8;font-size:0.82rem;font-weight:600;text-align:left}
+  .sql-toggle:hover{background:#162032;color:#e2e8f0}
+  .sql-toggle .arrow{font-size:0.65rem;transition:transform .2s;display:inline-block}
+  .sql-toggle.open .arrow{transform:rotate(90deg)}
+  .sql-body{display:none;padding:12px 20px 16px;background:#0a1628}
+  .sql-body.visible{display:block}
+  pre{font-family:'Fira Code',Consolas,monospace;font-size:0.8rem;
+      line-height:1.6;color:#7dd3fc;white-space:pre-wrap;word-break:break-word}
+
+  /* ── Table ── */
+  .table-wrap{padding:16px 20px 24px}
+  .table-meta{font-size:0.75rem;color:#64748b;margin-bottom:10px}
+  .scroll{overflow-x:auto;border-radius:8px;border:1px solid #1e293b}
+  table{width:100%;border-collapse:collapse;font-size:0.84rem}
+  th{background:#0f2744;color:#94a3b8;padding:9px 12px;text-align:left;
+     font-size:0.72rem;font-weight:700;text-transform:uppercase;
+     letter-spacing:.04em;white-space:nowrap;border-bottom:1px solid #1e3a5f}
+  td{padding:8px 12px;border-bottom:1px solid #1a2840;color:#cbd5e1;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:#162032}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;color:#7dd3fc}
+  td.hi{color:#f97316;font-weight:600}
+  td.empty{text-align:center;color:#475569;padding:24px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <span class="header-icon">⛽</span>
+  <span class="header-query" title="${esc(query)}">${esc(query) || 'Query Results'}</span>
+  <span class="badge">data</span>
+  <span class="header-meta">${ts} &nbsp;·&nbsp; ${rows.length} row${rows.length!==1?'s':''}</span>
+</div>
+
+${sql ? `
+<div class="sql-wrap">
+  <button class="sql-toggle" onclick="toggleSql(this)">
+    <span class="arrow">▶</span> View SQL Query
+  </button>
+  <div class="sql-body">
+    <pre>${esc(sql)}</pre>
+  </div>
+</div>` : ''}
+
+<div class="table-wrap">
+  <div class="table-meta">${rows.length} result${rows.length!==1?'s':''} returned</div>
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr>${cols.map(c=>`<th>${fmtCol(c)}</th>`).join('')}</tr>
+      </thead>
+      <tbody>${tbodyHtml}</tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+function toggleSql(btn){
+  btn.classList.toggle('open');
+  btn.nextElementSibling.classList.toggle('visible');
+}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+<\/script>
+</body>
+</html>`;
+
+  // ── Open or reuse the named popup window ─────────────────────────────
+  const winFeatures = 'width=980,height=640,resizable=yes,scrollbars=yes,toolbar=no,menubar=no';
+  try {
+    dataWin = window.open('', 'esp-data-panel', winFeatures);
+    if (!dataWin || dataWin.closed) {
+      // Popup was blocked or closed — open fresh
+      dataWin = window.open('about:blank', 'esp-data-panel', winFeatures);
+    }
+    dataWin.document.open();
+    dataWin.document.write(html);
+    dataWin.document.close();
+    dataWin.focus();
+  } catch (e) {
+    console.warn('Could not open results window:', e);
+  }
+}
+
+// ── Popup helper functions (referenced inside generated HTML) ─────────────
+function fmtCol(c) {
+  return c.replace(/_/g,' ').replace(/\b\w/g,x=>x.toUpperCase());
+}
+function fmtCell(v) {
+  if (v===null||v===undefined||v==='') return '—';
+  if (typeof v==='number') return Number.isInteger(v)?v:v.toFixed(1);
+  return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function isNumCol(c) {
+  return ['oil_bpd','liquid_bpd','water_cut_pct','uplift_oil_bpd','priority_score',
+          'prod_score','uplift_score','urgency_score','confidence_score','recency_score',
+          'confidence','days_since_last_visit','restarts_7d','vsd_trips_7d'].includes(c);
+}
+function isHiCol(c, v) {
+  return (c==='water_cut_pct'&&v>70)||(c==='priority_score'&&v>75);
 }
 
 // Init
