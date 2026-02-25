@@ -1,8 +1,14 @@
-"""LLM-to-SQL via OpenAI — converts natural language to DuckDB SQL.
+"""LLM-to-SQL — converts natural language to DuckDB SQL.
 
-Uses OpenAI API with schema context and few-shot examples.
-Environment variables:
-  OPENAI_API_KEY  — required
+Supports both Azure OpenAI (preferred) and standard OpenAI as fallback.
+
+Azure env vars (set all to use Azure):
+  AZURE_OPENAI_ENDPOINT          — e.g. https://my-resource.openai.azure.com/
+  AZURE_OPENAI_DEPLOYMENT_NAME   — chat completion deployment (e.g. gpt-4o)
+  AZURE_OPENAI_API_VERSION       — e.g. 2024-08-01-preview
+
+Standard OpenAI fallback:
+  OPENAI_API_KEY  — required if not using Azure
   OPENAI_MODEL    — optional, defaults to gpt-4o-mini
 """
 
@@ -10,8 +16,6 @@ from __future__ import annotations
 
 import logging
 import os
-
-from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -47,21 +51,8 @@ SQL: SELECT ROUND(AVG(oil_bpd), 1) AS avg_oil_bpd, ROUND(MIN(oil_bpd), 1) AS min
 """
 
 
-def nl_to_sql(query: str, schema: str) -> str:
-    """Convert a natural language query to DuckDB SQL using OpenAI.
-
-    Returns the raw SQL string (caller must validate with sql_guard).
-    Raises ValueError if API key is missing or call fails.
-    """
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable is not set")
-
-    model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-
-    client = OpenAI(api_key=api_key)
-
-    system_prompt = (
+def _build_system_prompt(schema: str) -> str:
+    return (
         "You are a SQL expert. Convert the user's natural language question into a single DuckDB SQL query.\n"
         "Rules:\n"
         "- Return ONLY the SQL query, no markdown, no explanation, no code fences.\n"
@@ -74,12 +65,32 @@ def nl_to_sql(query: str, schema: str) -> str:
         f"Few-shot examples:\n{_FEW_SHOT_EXAMPLES}"
     )
 
-    logger.info("LLM-to-SQL: model=%s query=%r", model, query)
+
+def nl_to_sql(query: str, schema: str) -> str:
+    """Convert a natural language query to DuckDB SQL.
+
+    Uses Azure OpenAI if configured, otherwise falls back to standard OpenAI.
+    Returns the raw SQL string (caller must validate with sql_guard).
+    """
+    from . import azure_config
+
+    if azure_config.is_azure_configured():
+        return _nl_to_sql_azure(query, schema)
+    return _nl_to_sql_openai(query, schema)
+
+
+def _nl_to_sql_azure(query: str, schema: str) -> str:
+    from . import azure_config
+
+    cfg = azure_config.load_config()
+    client = azure_config.build_client(cfg)
+
+    logger.info("LLM-to-SQL (Azure): deployment=%s query=%r", cfg.deployment, query)
 
     response = client.chat.completions.create(
-        model=model,
+        model=cfg.deployment,
         messages=[
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": _build_system_prompt(schema)},
             {"role": "user", "content": query},
         ],
         temperature=0,
@@ -87,5 +98,35 @@ def nl_to_sql(query: str, schema: str) -> str:
     )
 
     sql = response.choices[0].message.content.strip()
-    logger.info("LLM-to-SQL result: %s", sql)
+    logger.info("LLM-to-SQL (Azure) result: %s", sql)
+    return sql
+
+
+def _nl_to_sql_openai(query: str, schema: str) -> str:
+    from openai import OpenAI
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "No LLM configured. Set AZURE_OPENAI_ENDPOINT + AZURE_OPENAI_DEPLOYMENT_NAME "
+            "for Azure OpenAI, or OPENAI_API_KEY for standard OpenAI."
+        )
+
+    model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    client = OpenAI(api_key=api_key)
+
+    logger.info("LLM-to-SQL (OpenAI): model=%s query=%r", model, query)
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": _build_system_prompt(schema)},
+            {"role": "user", "content": query},
+        ],
+        temperature=0,
+        max_tokens=500,
+    )
+
+    sql = response.choices[0].message.content.strip()
+    logger.info("LLM-to-SQL (OpenAI) result: %s", sql)
     return sql

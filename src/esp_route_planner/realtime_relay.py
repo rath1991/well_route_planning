@@ -1,9 +1,11 @@
-"""OpenAI Realtime API relay server.
+"""Realtime API relay server — supports Azure OpenAI and standard OpenAI.
 
-Proxies WebSocket connections between a browser client and OpenAI's
-Realtime API.  Intercepts function-call events to execute data queries
-and route planning locally, then feeds results back so the model can
-speak the answer.
+Proxies WebSocket connections between a browser client and the Realtime API.
+Intercepts function-call events to execute data queries and route planning
+locally, then feeds results back so the model can speak the answer.
+
+Azure OpenAI is used when AZURE_OPENAI_ENDPOINT + AZURE_OPENAI_REALTIME_DEPLOYMENT
+are set; otherwise falls back to standard OpenAI (OPENAI_API_KEY).
 """
 
 from __future__ import annotations
@@ -182,26 +184,56 @@ def _execute_function(name: str, arguments: dict, session_context: dict) -> str:
     return json.dumps(result, default=str)
 
 
-async def relay_session(client_ws, base_url: str = "http://127.0.0.1:8000") -> None:
-    """Run a full relay session between *client_ws* and OpenAI Realtime API."""
+def _build_realtime_connection() -> tuple[str, dict]:
+    """Return (wss_url, headers) for either Azure or standard OpenAI Realtime."""
+    from . import azure_config
+
+    if azure_config.is_azure_configured():
+        cfg = azure_config.load_config()
+        url = azure_config.get_realtime_wss_url(cfg)
+
+        # Get a short-lived Azure AD token for the WebSocket handshake
+        from azure.identity import AzureCliCredential
+        credential = AzureCliCredential()
+        token = credential.get_token("https://cognitiveservices.azure.com/.default").token
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "OpenAI-Beta": "realtime=v1",
+        }
+        logger.info("Using Azure OpenAI Realtime: %s", url)
+        return url, headers
+
+    # Standard OpenAI fallback
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        await client_ws.send_json({"error": "OPENAI_API_KEY not configured"})
-        await client_ws.close()
-        return
-
-    headers = {
+        raise ValueError(
+            "No Realtime API configured. Set AZURE_OPENAI_ENDPOINT + "
+            "AZURE_OPENAI_REALTIME_DEPLOYMENT for Azure, or OPENAI_API_KEY for OpenAI."
+        )
+    logger.info("Using standard OpenAI Realtime")
+    return OPENAI_REALTIME_URL, {
         "Authorization": f"Bearer {api_key}",
         "OpenAI-Beta": "realtime=v1",
     }
 
+
+async def relay_session(client_ws, base_url: str = "http://127.0.0.1:8000") -> None:
+    """Run a full relay session between *client_ws* and the Realtime API."""
+    try:
+        realtime_url, headers = _build_realtime_connection()
+    except ValueError as e:
+        await client_ws.send_json({"error": str(e)})
+        await client_ws.close()
+        return
+
     try:
         async with websockets.connect(
-            OPENAI_REALTIME_URL,
+            realtime_url,
             additional_headers=headers,
             max_size=2**24,  # 16 MB for audio chunks
         ) as openai_ws:
-            logger.info("Connected to OpenAI Realtime API")
+            logger.info("Connected to Realtime API: %s", realtime_url)
 
             # Configure session with tools and instructions
             session_config = {
