@@ -92,12 +92,17 @@ _COUNTIES = [
     ("Reeves", "TX"), ("Loving", "TX"), ("Ward", "TX"),
     ("Eddy", "NM"), ("Lea", "NM"),
 ]
-_ISSUE_CATS = ["restarts_vsd_trips", "gauge_flatlined", "freq_suboptimal", "pump_efficiency_drop"]
+_ISSUE_CATS_HIGH = ["restarts_vsd_trips", "pump_efficiency_drop"]
+_ISSUE_CATS_MEDIUM = ["gauge_flatlined", "freq_suboptimal", "motor_current_spiky", "vibration_high"]
+_ISSUE_CATS_LOW = ["amps_rising_flat_prod", "freq_suboptimal", "vibration_high"]
 _ACTIONS = {
-    "restarts_vsd_trips": "Investigate frequent restarts; check cable + VSD",
-    "gauge_flatlined": "Replace or recalibrate downhole gauge",
-    "freq_suboptimal": "Review VSD frequency settings; schedule adjustment",
+    "restarts_vsd_trips":   "Investigate frequent restarts; check cable + VSD",
+    "gauge_flatlined":      "Replace or recalibrate downhole gauge",
+    "freq_suboptimal":      "Review VSD frequency settings; schedule adjustment",
     "pump_efficiency_drop": "Inspect pump stages; review vibration data",
+    "motor_current_spiky":  "Monitor motor current trends; check for scaling or wear",
+    "vibration_high":       "Inspect tubing and ESP centralizers; check for imbalance",
+    "amps_rising_flat_prod":"Review amp trend vs production; inspect pump intake",
 }
 
 
@@ -134,28 +139,33 @@ def _generate_wells(seed: int, n_extra: int = 15) -> list[tuple]:
         days_test = rng.randint(10, 90)
         days_visit = rng.randint(5, 60)
 
-        # ~60% have reliability issues
-        has_issue = rng.random() < 0.6
-        if has_issue:
-            restarts = rng.choice([0, 0, 2, 3, 5])
-            vsd = rng.choice([0, 0, 1, 2])
+        # All ESP wells have an operational observation — severity varies
+        severity = rng.choice(["HIGH", "HIGH", "MEDIUM", "MEDIUM", "MEDIUM", "LOW"])
+        if severity == "HIGH":
+            restarts = rng.choice([0, 3, 5, 7])
+            vsd = rng.choice([0, 1, 2])
+            motor_temp = rng.random() < 0.35
+            intake_unstable = rng.random() < 0.30
+            gauge_flat = rng.random() < 0.20
+            conf = round(rng.uniform(0.75, 0.95), 2)
+            issue_cat = rng.choice(_ISSUE_CATS_HIGH)
+            workover = rng.choice(["NONE", "3_6_MONTHS", "IMMEDIATE"])
+        elif severity == "MEDIUM":
+            restarts = rng.choice([0, 0, 2, 3])
+            vsd = rng.choice([0, 0, 1])
             motor_temp = rng.random() < 0.15
             intake_unstable = rng.random() < 0.15
-            gauge_flat = rng.random() < 0.2
-            conf = round(rng.uniform(0.5, 0.95), 2)
-            issue_cat = rng.choice(_ISSUE_CATS)
-            severity = rng.choice(["HIGH", "MEDIUM", "LOW"])
-            action = _ACTIONS[issue_cat]
-            workover = (
-                rng.choice(["NONE", "NONE", "3_6_MONTHS", "IMMEDIATE"])
-                if severity == "HIGH" else "NONE"
-            )
-        else:
+            gauge_flat = rng.random() < 0.25
+            conf = round(rng.uniform(0.60, 0.85), 2)
+            issue_cat = rng.choice(_ISSUE_CATS_MEDIUM)
+            workover = rng.choice(["NONE", "NONE", "3_6_MONTHS"])
+        else:  # LOW
             restarts, vsd = 0, 0
             motor_temp, intake_unstable, gauge_flat = False, False, False
-            conf = round(rng.uniform(0.7, 0.98), 2)
-            issue_cat, severity, action = None, None, ""
+            conf = round(rng.uniform(0.70, 0.98), 2)
+            issue_cat = rng.choice(_ISSUE_CATS_LOW)
             workover = "NONE"
+        action = _ACTIONS[issue_cat]
 
         wells.append((
             wid, wname, pad, field, county, state, lat, lon,
@@ -388,11 +398,10 @@ def seed_database(seed: int = 42, force_recreate: bool = False) -> SeedResult:
             [wid, restarts, vsd, motor_temp, intake_unstable, gauge_flat,
              conf, False, False, False],
         )
-        if issue_cat:
-            con.execute(
-                "INSERT INTO ops_recommendations_latest VALUES (?,?,?,?,?)",
-                [wid, issue_cat, severity, action, workover],
-            )
+        con.execute(
+            "INSERT INTO ops_recommendations_latest VALUES (?,?,?,?,?)",
+            [wid, issue_cat, severity, action, workover],
+        )
 
     con.execute(_VIEW_SQL)
 
