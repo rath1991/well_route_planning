@@ -5,6 +5,7 @@ NL query -> LLM-to-SQL or route planning.
 """
 
 import logging
+import os
 import traceback
 import webbrowser
 from pathlib import Path
@@ -14,7 +15,7 @@ from dotenv import load_dotenv
 # Load .env from project root before any other imports that need env vars
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,11 +24,14 @@ from pydantic import BaseModel, Field
 from esp_route_planner.database import db_exists, seed_database
 from esp_route_planner.intent import is_routing_intent
 from esp_route_planner.schemas import Location
+from esp_route_planner.security import admin_guard, webhook_guard
 from esp_route_planner.utils import OUTPUTS_DIR, ensure_output_dirs
 from esp_route_planner.realtime_relay import relay_session
 from esp_route_planner.webhook import handle_data_query, handle_route_from_cached, handle_route_query
 
 logger = logging.getLogger(__name__)
+
+IS_PROD = os.environ.get("ENV", "dev").lower() == "prod"
 
 # In-memory store for the latest data query result (updated on every data query)
 _latest_result: dict = {}
@@ -45,6 +49,9 @@ app = FastAPI(
     title="ESP Route Planner",
     version="0.4.0",
     description="Voice-enabled ESP field assistant via OpenAI Realtime API + ElevenLabs webhook fallback.",
+    docs_url=None if IS_PROD else "/docs",
+    redoc_url=None if IS_PROD else "/redoc",
+    openapi_url=None if IS_PROD else "/openapi.json",
 )
 
 # CORS — ElevenLabs may need it
@@ -83,7 +90,7 @@ class SeedRequest(BaseModel):
     force_recreate: bool = False
 
 
-@app.post("/admin/seed")
+@app.post("/admin/seed", dependencies=[Depends(admin_guard)])
 def admin_seed(req: SeedRequest) -> dict:
     """Seed or recreate the DuckDB database (~20 Delaware Basin wells)."""
     result = seed_database(seed=req.seed, force_recreate=req.force_recreate)
@@ -118,19 +125,19 @@ class WebhookQueryRequest(BaseModel):
     context: WebhookContext = Field(default_factory=WebhookContext)
 
 
-@app.get("/results")
+@app.get("/results", dependencies=[Depends(admin_guard)])
 def results_page():
     """Serve the persistent query-results window."""
     return FileResponse(STATIC_DIR / "results.html")
 
 
-@app.get("/api/latest-result")
+@app.get("/api/latest-result", dependencies=[Depends(admin_guard)])
 def latest_result():
     """Return the most recent data query result for the results page to poll."""
     return _latest_result
 
 
-@app.post("/webhook/elevenlabs/query")
+@app.post("/webhook/elevenlabs/query", dependencies=[Depends(webhook_guard)])
 def webhook_query(req: WebhookQueryRequest, request: Request) -> dict:
     """Main ElevenLabs entrypoint — detects intent and routes accordingly."""
     global _latest_result, _last_data_preview, _last_well_ids
@@ -217,7 +224,7 @@ class DirectRouteRequest(BaseModel):
     must_visit_ids: list[str] = Field(default_factory=list)
 
 
-@app.post("/webhook/elevenlabs/route")
+@app.post("/webhook/elevenlabs/route", dependencies=[Depends(webhook_guard)])
 def webhook_route(req: DirectRouteRequest) -> dict:
     """Direct routing hook — bypasses intent detection."""
     if not db_exists():
@@ -261,7 +268,7 @@ def webhook_route(req: DirectRouteRequest) -> dict:
 # ── OpenAI Realtime Voice Agent ──────────────────────────────────────────
 
 
-@app.get("/realtime")
+@app.get("/realtime", dependencies=[Depends(admin_guard)])
 def realtime_page():
     """Serve the voice assistant HTML client."""
     return FileResponse(STATIC_DIR / "realtime.html")
