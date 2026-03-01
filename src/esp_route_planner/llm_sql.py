@@ -44,6 +44,12 @@ SQL: SELECT county, state, COUNT(*) AS well_count FROM wells GROUP BY county, st
 
 Q: What is the average oil production?
 SQL: SELECT ROUND(AVG(oil_bpd), 1) AS avg_oil_bpd, ROUND(MIN(oil_bpd), 1) AS min_oil_bpd, ROUND(MAX(oil_bpd), 1) AS max_oil_bpd FROM production_latest
+
+Q: Which wells take the longest to fix?
+SQL: SELECT well_id, name, avg_repair_hours, issue_category, severity FROM well_priority_vw WHERE avg_repair_hours IS NOT NULL ORDER BY avg_repair_hours DESC LIMIT 10
+
+Q: What is the average repair time for high severity wells?
+SQL: SELECT ROUND(AVG(w.avg_repair_hours), 1) AS avg_repair_hrs, ROUND(MIN(w.avg_repair_hours), 1) AS min_repair_hrs, ROUND(MAX(w.avg_repair_hours), 1) AS max_repair_hrs, COUNT(*) AS well_count FROM wells w JOIN ops_recommendations_latest o ON w.well_id = o.well_id WHERE o.severity = 'HIGH' AND w.avg_repair_hours IS NOT NULL
 """
 
 
@@ -68,6 +74,7 @@ def nl_to_sql(query: str, schema: str) -> str:
         "- Use only the tables and views described in the schema below.\n"
         "- Always include a reasonable LIMIT (max 50) unless counting/aggregating.\n"
         "- Use the well_priority_vw view when the question involves priority scores or ranking.\n"
+        "- Use avg_repair_hours (from wells or well_priority_vw) when the question involves repair time, fix time, or maintenance duration.\n"
         "- DuckDB syntax: use STRING_AGG, ROUND, LEAST, GREATEST etc.\n"
         "- When the query returns individual well records (not aggregates/counts), always include well_id as the FIRST column in SELECT.\n\n"
         f"Schema:\n{schema}\n\n"
