@@ -29,63 +29,63 @@ DB_PATH = OUTPUTS_DIR / "db" / "esp_delaware.duckdb"
 #          oil_bpd, liquid_bpd, water_cut, uplift, days_test, days_visit,
 #          restarts_7d, vsd_trips_7d, motor_temp_high, intake_unstable,
 #          gauge_flat, confidence,
-#          issue_cat, severity, action, workover_horizon)
+#          issue_cat, severity, action, workover_horizon, avg_repair_hours)
 
 _HERO_WELLS = [
     (
-        "BEXAR-P12121WA", "BEXAR P12121WA", "BEXAR 121 Pad A",
+        "FRONTIER-1212WA", "FRONTIER REDSTONE 1212WA", "FRONTIER 12 Pad A",
         "Red Hills", "Reeves", "TX", 31.88, -103.22,
         576, 1920, 70.0, 45, 60, 38,
         7, 3, True, True, False, 0.91,
         "restarts_vsd_trips", "HIGH",
         "Immediate: motor temp + intake pressure unstable; schedule workover",
-        "IMMEDIATE",
+        "IMMEDIATE", 8.5,
     ),
     (
-        "CMC-4844CL", "CMC RANGER 4844CL", "CMC 48 Pad A",
+        "APEX-4844CL", "APEX RANGER 4844CL", "APEX 48 Pad A",
         "Ranger Draw", "Reeves", "TX", 31.94, -103.15,
         420, 1050, 60.0, 28, 45, 21,
         2, 1, False, False, False, 0.85,
         "restarts_vsd_trips", "MEDIUM",
         "Confirm VSD frequency change window; review restart log",
-        "NONE",
+        "NONE", 3.5,
     ),
     (
-        "VLT-0451WA", "VLT VULCAN 0451WA", "VLT 4 Pad B",
+        "SUMMIT-0451WA", "SUMMIT VULCAN 0451WA", "SUMMIT 4 Pad B",
         "Vulcan Flat", "Loving", "TX", 31.99, -103.05,
         310, 885, 65.0, 35, 60, 35,
         0, 0, False, False, True, 0.72,
         "gauge_flatlined", "MEDIUM",
         "Replace or recalibrate downhole gauge; check fluid properties",
-        "3_6_MONTHS",
+        "3_6_MONTHS", 4.0,
     ),
     (
-        "CMC-0325WA", "CMC SNAPDRAGON 325WA", "CMC 3 Pad C",
+        "BASIN-0325WA", "BASIN CANYON 0325WA", "BASIN 3 Pad C",
         "Ranger Draw", "Reeves", "TX", 31.82, -103.28,
         550, 2200, 75.0, 15, 30, 14,
         0, 0, False, False, False, 0.68,
         "pump_efficiency_drop", "MEDIUM",
         "Investigate rising water cut; confirm separators",
-        "3_6_MONTHS",
+        "3_6_MONTHS", 3.0,
     ),
     (
-        "RIBEYE-1001WA", "RIBEYE MESA 1001WA", "RIBEYE 10 Pad A",
+        "PLAINS-1001WA", "PLAINS MESA 1001WA", "PLAINS 10 Pad A",
         "Mesa Verde", "Ward", "TX", 31.75, -103.38,
         380, 1140, 66.7, 20, 40, 28,
         4, 2, False, False, False, 0.80,
         "restarts_vsd_trips", "HIGH",
         "Investigate frequent restarts; check cable + VSD",
-        "IMMEDIATE",
+        "IMMEDIATE", 7.0,
     ),
 ]
 
 # ── Pools for generated wells ─────────────────────────────────────────────
 
-_PREFIXES = ["CMC", "VLT", "NMC", "SMC", "RIBEYE", "PECOS", "WARD", "RED"]
+_PREFIXES = ["APEX", "FRONTIER", "SUMMIT", "BASIN", "PLAINS", "VECTOR", "HORIZON", "TRINITY"]
 _NAMES = [
     "HAWK", "COYOTE", "MUSTANG", "FALCON", "PRONGHORN", "EAGLE",
     "VIPER", "TALON", "MESA", "CANYON", "BLUFF", "RIDGE", "CREEK",
-    "BUTTE", "DUNE",
+    "BUTTE", "DUNE", "DRAW", "FLATS", "BEND", "HOLLOW",
 ]
 _FIELDS = ["Red Hills", "Ranger Draw", "Vulcan Flat", "Mesa Verde", "Pecos Bend", "Ward Flats"]
 _COUNTIES = [
@@ -167,11 +167,18 @@ def _generate_wells(seed: int, n_extra: int = 15) -> list[tuple]:
             workover = "NONE"
         action = _ACTIONS[issue_cat]
 
+        if severity == "HIGH":
+            avg_repair_hours = round(rng.uniform(5.0, 10.0), 1)
+        elif severity == "MEDIUM":
+            avg_repair_hours = round(rng.uniform(2.0, 5.0), 1)
+        else:  # LOW
+            avg_repair_hours = round(rng.uniform(1.0, 3.0), 1)
+
         wells.append((
             wid, wname, pad, field, county, state, lat, lon,
             oil, liquid, wc, uplift, days_test, days_visit,
             restarts, vsd, motor_temp, intake_unstable, gauge_flat, conf,
-            issue_cat, severity, action, workover,
+            issue_cat, severity, action, workover, avg_repair_hours,
         ))
 
     return wells
@@ -197,7 +204,8 @@ CREATE TABLE wells (
     basin         VARCHAR NOT NULL DEFAULT 'Delaware Basin',
     lat           DOUBLE NOT NULL,
     lon           DOUBLE NOT NULL,
-    is_esp        BOOLEAN NOT NULL DEFAULT TRUE
+    is_esp        BOOLEAN NOT NULL DEFAULT TRUE,
+    avg_repair_hours DOUBLE
 );
 
 CREATE TABLE production_latest (
@@ -243,6 +251,7 @@ SELECT
     w.county,
     w.state,
     w.pad_name,
+    w.avg_repair_hours,
     p.oil_bpd,
     p.liquid_bpd,
     p.water_cut_pct,
@@ -332,7 +341,8 @@ def get_schema_text() -> str:
     """Return a concise schema description for LLM-to-SQL prompting."""
     return """Tables in DuckDB:
 
-TABLE wells (well_id VARCHAR PK, name VARCHAR, asset VARCHAR, pad_name VARCHAR, field VARCHAR, county VARCHAR, state VARCHAR, basin VARCHAR, lat DOUBLE, lon DOUBLE, is_esp BOOLEAN)
+TABLE wells (well_id VARCHAR PK, name VARCHAR, asset VARCHAR, pad_name VARCHAR, field VARCHAR, county VARCHAR, state VARCHAR, basin VARCHAR, lat DOUBLE, lon DOUBLE, is_esp BOOLEAN, avg_repair_hours DOUBLE)
+  -- avg_repair_hours: historical average hours to diagnose and fix issues at this well
 
 TABLE production_latest (well_id VARCHAR PK FK->wells, oil_bpd DOUBLE, liquid_bpd DOUBLE, water_cut_pct DOUBLE, uplift_oil_bpd DOUBLE, days_since_last_test INTEGER, days_since_last_visit INTEGER)
 
@@ -343,7 +353,7 @@ TABLE ops_recommendations_latest (well_id VARCHAR PK FK->wells, issue_category V
   -- severity values: 'HIGH', 'MEDIUM', 'LOW', NULL
   -- workover_horizon values: 'IMMEDIATE', '3_6_MONTHS', 'NONE'
 
-VIEW well_priority_vw (well_id, name, lat, lon, field, county, state, pad_name, oil_bpd, liquid_bpd, water_cut_pct, uplift_oil_bpd, days_since_last_test, days_since_last_visit, restarts_7d, vsd_trips_7d, motor_temp_high, intake_pressure_unstable, downhole_gauge_flatlined, confidence, issue_category, severity, action_required, workover_horizon, prod_score, uplift_score, urgency_score, confidence_score, recency_score, priority_score)
+VIEW well_priority_vw (well_id, name, lat, lon, field, county, state, pad_name, avg_repair_hours, oil_bpd, liquid_bpd, water_cut_pct, uplift_oil_bpd, days_since_last_test, days_since_last_visit, restarts_7d, vsd_trips_7d, motor_temp_high, intake_pressure_unstable, downhole_gauge_flatlined, confidence, issue_category, severity, action_required, workover_horizon, prod_score, uplift_score, urgency_score, confidence_score, recency_score, priority_score)
   -- priority_score = 0.30*prod + 0.25*uplift + 0.25*urgency + 0.10*confidence + 0.10*recency (each 0-100)
   -- Use this view for most queries about well priority, scoring, and ranking."""
 
@@ -382,12 +392,12 @@ def seed_database(seed: int = 42, force_recreate: bool = False) -> SeedResult:
         (wid, wname, pad, field, county, state, lat, lon,
          oil, liquid, wc, uplift, days_test, days_visit,
          restarts, vsd, motor_temp, intake_unstable, gauge_flat, conf,
-         issue_cat, severity, action, workover) = w
+         issue_cat, severity, action, workover, avg_repair_hours) = w
 
         con.execute(
-            "INSERT INTO wells VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO wells VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             [wid, wname, "Delaware Basin", pad, field, county, state,
-             "Delaware Basin", lat, lon, True],
+             "Delaware Basin", lat, lon, True, avg_repair_hours],
         )
         con.execute(
             "INSERT INTO production_latest VALUES (?,?,?,?,?,?,?)",
@@ -411,7 +421,7 @@ def seed_database(seed: int = 42, force_recreate: bool = False) -> SeedResult:
         "SELECT COUNT(*) FROM ops_recommendations_latest WHERE issue_category IS NOT NULL"
     ).fetchone()[0]
     sample = con.execute(
-        "SELECT well_id, name, priority_score FROM well_priority_vw "
+        "SELECT well_id, name, priority_score, avg_repair_hours FROM well_priority_vw "
         "ORDER BY priority_score DESC LIMIT 5"
     ).fetchall()
     con.close()
@@ -420,7 +430,7 @@ def seed_database(seed: int = 42, force_recreate: bool = False) -> SeedResult:
         total_wells=total,
         with_issues=with_issues,
         sample_wells=[
-            {"well_id": r[0], "name": r[1], "priority_score": r[2]}
+            {"well_id": r[0], "name": r[1], "priority_score": r[2], "avg_repair_hours": r[3]}
             for r in sample
         ],
         valid=True,
