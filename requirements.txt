@@ -1,0 +1,12 @@
+fastapi==0.129.0
+uvicorn[standard]==0.41.0
+pydantic==2.12.5
+ortools==9.15.6755
+folium==0.20.0
+duckdb==1.4.4
+openai==2.21.0
+azure-identity==1.25.2
+python-dotenv==1.2.1
+googlemaps==4.10.0
+websockets==16.0
+httpx==0.28.1
