@@ -6,8 +6,10 @@ NL query -> LLM-to-SQL or route planning.
 
 import logging
 import os
+import shutil
 import traceback
 import webbrowser
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -21,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from esp_route_planner.database import db_exists, seed_database
+from esp_route_planner.database import DB_PATH, db_exists, seed_database
 from esp_route_planner.intent import is_routing_intent
 from esp_route_planner.schemas import Location
 from esp_route_planner.security import admin_guard, webhook_guard
@@ -32,6 +34,23 @@ from esp_route_planner.webhook import handle_data_query, handle_route_from_cache
 logger = logging.getLogger(__name__)
 
 IS_PROD = os.environ.get("ENV", "dev").lower() == "prod"
+
+# ── Startup: auto-load DB from committed data/ if missing ────────────────────
+
+_DATA_DB = Path(__file__).resolve().parents[1] / "data" / "esp_delaware.duckdb"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if not db_exists():
+        if _DATA_DB.exists():
+            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(_DATA_DB, DB_PATH)
+            logger.info("Loaded database from data/esp_delaware.duckdb")
+        else:
+            seed_database()
+            logger.info("Seeded fresh database")
+    yield
 
 # In-memory store for the latest data query result (updated on every data query)
 _latest_result: dict = {}
@@ -52,6 +71,7 @@ app = FastAPI(
     docs_url=None if IS_PROD else "/docs",
     redoc_url=None if IS_PROD else "/redoc",
     openapi_url=None if IS_PROD else "/openapi.json",
+    lifespan=lifespan,
 )
 
 # CORS — ElevenLabs may need it
@@ -125,13 +145,13 @@ class WebhookQueryRequest(BaseModel):
     context: WebhookContext = Field(default_factory=WebhookContext)
 
 
-@app.get("/results", dependencies=[Depends(admin_guard)])
+@app.get("/results")
 def results_page():
     """Serve the persistent query-results window."""
     return FileResponse(STATIC_DIR / "results.html")
 
 
-@app.get("/api/latest-result", dependencies=[Depends(admin_guard)])
+@app.get("/api/latest-result")
 def latest_result():
     """Return the most recent data query result for the results page to poll."""
     return _latest_result
