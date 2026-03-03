@@ -129,7 +129,7 @@ _WELL_COLS = """
            water_cut_pct, priority_score, prod_score, uplift_score,
            urgency_score, confidence_score, recency_score,
            issue_category, action_required, days_since_last_visit,
-           confidence
+           confidence, avg_repair_hours
     FROM well_priority_vw
 """
 
@@ -247,14 +247,17 @@ def handle_route_query(
     for c in candidates:
         (wid, name, lat, lon, oil, uplift, wc, pscore,
          prod_s, uplift_s, urgency_s, conf_s, recency_s,
-         issue_cat, action, days_visit, confidence) = c
+         issue_cat, action, days_visit, confidence, avg_repair_hours) = c
+
+        # Convert avg_repair_hours (DB hours) → service_minutes; fall back to default
+        service_min = round(avg_repair_hours * 60) if avg_repair_hours else SERVICE_MINUTES_DEFAULT
 
         wells.append({
             "well_id": wid, "name": name, "lat": lat, "lon": lon,
             "oil_bpd": oil, "uplift_oil_bpd": uplift, "water_cut_pct": wc,
             "priority_score": pscore, "issue_category": issue_cat or "",
             "action_required": action or "", "days_since_last_visit": days_visit,
-            "confidence": confidence,
+            "confidence": confidence, "service_minutes": service_min,
         })
         priority_scores.append(pscore)
         breakdowns.append(ScoreBreakdown(
@@ -272,7 +275,7 @@ def handle_route_query(
             water_cut_pct=w["water_cut_pct"], uplift_oil_bpd=w["uplift_oil_bpd"],
             issues=[w["issue_category"]] if w["issue_category"] else [],
             action_required=w["action_required"],
-            service_minutes=SERVICE_MINUTES_DEFAULT,
+            service_minutes=w["service_minutes"],
             confidence=w["confidence"],
             days_since_last_visit=w["days_since_last_visit"],
         )
@@ -291,7 +294,7 @@ def handle_route_query(
     time_matrix = build_time_matrix(start, end, schema_wells, avg_speed_kmph=45)
 
     # Solve route
-    service_times = [SERVICE_MINUTES_DEFAULT] * len(wells)
+    service_times = [w["service_minutes"] for w in wells]
     result = solve_route(
         time_matrix=time_matrix,
         priority_scores=priority_scores,
@@ -330,14 +333,15 @@ def handle_route_query(
         drive_min = round(d_km / 45 * 60, 1)
         elapsed += drive_min
         eta = elapsed
-        elapsed += SERVICE_MINUTES_DEFAULT
+        svc_min = w["service_minutes"]
+        elapsed += svc_min
         total_drive += drive_min
-        total_service += SERVICE_MINUTES_DEFAULT
+        total_service += svc_min
 
         schedule.append({
             "stop_id": w["well_id"], "name": w["name"], "stop_number": rank,
             "eta": minutes_from_start(eta), "drive_minutes": drive_min,
-            "service_minutes": SERVICE_MINUTES_DEFAULT,
+            "service_minutes": svc_min,
             "priority_score": round(w["priority_score"], 1),
             "action_required": w["action_required"],
         })

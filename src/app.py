@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from esp_route_planner.database import DB_PATH, db_exists, seed_database
+from esp_route_planner.database import DB_PATH, db_exists, refresh_view, seed_database
 from esp_route_planner.intent import is_routing_intent
 from esp_route_planner.schemas import Location
 from esp_route_planner.security import admin_guard, webhook_guard
@@ -50,6 +50,8 @@ async def lifespan(app: FastAPI):
         else:
             seed_database()
             logger.info("Seeded fresh database")
+    # Always refresh the view so schema changes take effect on existing DBs
+    refresh_view()
     yield
 
 # In-memory store for the latest data query result (updated on every data query)

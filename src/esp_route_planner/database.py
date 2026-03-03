@@ -251,6 +251,7 @@ SELECT
     w.county,
     w.state,
     w.pad_name,
+    w.is_esp,
     w.avg_repair_hours,
     p.oil_bpd,
     p.liquid_bpd,
@@ -353,9 +354,24 @@ TABLE ops_recommendations_latest (well_id VARCHAR PK FK->wells, issue_category V
   -- severity values: 'HIGH', 'MEDIUM', 'LOW', NULL
   -- workover_horizon values: 'IMMEDIATE', '3_6_MONTHS', 'NONE'
 
-VIEW well_priority_vw (well_id, name, lat, lon, field, county, state, pad_name, avg_repair_hours, oil_bpd, liquid_bpd, water_cut_pct, uplift_oil_bpd, days_since_last_test, days_since_last_visit, restarts_7d, vsd_trips_7d, motor_temp_high, intake_pressure_unstable, downhole_gauge_flatlined, confidence, issue_category, severity, action_required, workover_horizon, prod_score, uplift_score, urgency_score, confidence_score, recency_score, priority_score)
+VIEW well_priority_vw (well_id, name, lat, lon, field, county, state, pad_name, is_esp, avg_repair_hours, oil_bpd, liquid_bpd, water_cut_pct, uplift_oil_bpd, days_since_last_test, days_since_last_visit, restarts_7d, vsd_trips_7d, motor_temp_high, intake_pressure_unstable, downhole_gauge_flatlined, confidence, issue_category, severity, action_required, workover_horizon, prod_score, uplift_score, urgency_score, confidence_score, recency_score, priority_score)
   -- priority_score = 0.30*prod + 0.25*uplift + 0.25*urgency + 0.10*confidence + 0.10*recency (each 0-100)
+  -- All rows in this view have is_esp = TRUE (non-ESP wells are excluded)
   -- Use this view for most queries about well priority, scoring, and ranking."""
+
+
+def refresh_view() -> None:
+    """Drop and recreate well_priority_vw with the latest definition.
+
+    Safe to call on every startup — only the view is touched, no data is modified.
+    Ensures schema changes (e.g. adding is_esp to SELECT) take effect on existing DBs.
+    """
+    con = get_connection()
+    try:
+        con.execute("DROP VIEW IF EXISTS well_priority_vw")
+        con.execute(_VIEW_SQL)
+    finally:
+        con.close()
 
 
 def seed_database(seed: int = 42, force_recreate: bool = False) -> SeedResult:
