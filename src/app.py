@@ -269,10 +269,14 @@ class DirectRouteRequest(BaseModel):
 
 
 @app.post("/webhook/elevenlabs/route", dependencies=[Depends(webhook_guard)])
-def webhook_route(req: DirectRouteRequest) -> dict:
+def webhook_route(req: DirectRouteRequest, request: Request) -> dict:
     """Direct routing hook — bypasses intent detection."""
+    global _latest_map
+
     if not db_exists():
         raise HTTPException(status_code=400, detail="Database not seeded. Call POST /admin/seed first.")
+
+    base_url = str(request.base_url).rstrip("/")
 
     start = Location(
         lat=req.start_location.lat,
@@ -281,32 +285,45 @@ def webhook_route(req: DirectRouteRequest) -> dict:
     )
 
     if req.must_visit_ids:
-        return handle_route_query(
+        route_result = handle_route_query(
             query=req.query,
             start=start,
             time_budget_minutes=req.time_budget_minutes,
             max_stops=req.max_stops,
             top_n_candidates=req.top_n_candidates,
             must_visit_ids=req.must_visit_ids,
-            base_url="http://127.0.0.1:8000",
+            base_url=base_url,
         )
     elif _last_data_preview:
         logger.info("Route endpoint: using cached data_preview (%d rows)", len(_last_data_preview))
-        return handle_route_from_cached(
+        route_result = handle_route_from_cached(
             cached_rows=_last_data_preview,
             start=start,
             time_budget_minutes=req.time_budget_minutes,
-            base_url="http://127.0.0.1:8000",
+            base_url=base_url,
         )
     else:
-        return handle_route_query(
+        route_result = handle_route_query(
             query=req.query,
             start=start,
             time_budget_minutes=req.time_budget_minutes,
             max_stops=req.max_stops,
             top_n_candidates=req.top_n_candidates,
-            base_url="http://127.0.0.1:8000",
+            base_url=base_url,
         )
+
+    map_url = route_result.get("artifacts", {}).get("map_url", "")
+    if map_url:
+        _latest_map = {
+            "map_url": map_url,
+            "spoken_text": route_result.get("spoken_text", ""),
+        }
+
+    if not IS_PROD:
+        webbrowser.open(map_url)
+
+    route_result["map_page_url"] = f"{base_url}/map"
+    return route_result
 
 
 # ── OpenAI Realtime Voice Agent ──────────────────────────────────────────
