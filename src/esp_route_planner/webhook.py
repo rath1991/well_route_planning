@@ -27,6 +27,7 @@ from .visualize import build_transit_map
 logger = logging.getLogger(__name__)
 
 SERVICE_MINUTES_DEFAULT = 35
+SERVICE_MINUTES_MAX = 180  # cap at 3 hours per well
 
 
 # ── Data intent handler ───────────────────────────────────────────────────
@@ -249,8 +250,8 @@ def handle_route_query(
          prod_s, uplift_s, urgency_s, conf_s, recency_s,
          issue_cat, action, days_visit, confidence, avg_repair_hours) = c
 
-        # Convert avg_repair_hours (DB hours) → service_minutes; fall back to default
-        service_min = round(avg_repair_hours * 60) if avg_repair_hours else SERVICE_MINUTES_DEFAULT
+        # Convert avg_repair_hours (DB hours) → service_minutes; fall back to default; cap at 3 h
+        service_min = min(round(avg_repair_hours * 60), SERVICE_MINUTES_MAX) if avg_repair_hours else SERVICE_MINUTES_DEFAULT
 
         wells.append({
             "well_id": wid, "name": name, "lat": lat, "lon": lon,
