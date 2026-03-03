@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP Route Map</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f172a; color: #e2e8f0;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+
+  .header {
+    background: #0f2744; padding: 14px 24px;
+    display: flex; align-items: center; gap: 12px;
+    border-bottom: 1px solid #1e3a5f;
+    flex-shrink: 0;
+  }
+  .header-icon { font-size: 1.3rem; }
+  .header-label {
+    flex: 1; font-size: 0.95rem; font-weight: 600; color: #e2e8f0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .header-meta { font-size: 0.75rem; color: #64748b; white-space: nowrap; }
+  .badge {
+    background: #1e3a5f; color: #7dd3fc;
+    font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+    padding: 3px 10px; border-radius: 999px;
+  }
+  .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #22c55e; flex-shrink: 0;
+    animation: blink 2s ease-in-out infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  .map-frame {
+    flex: 1;
+    border: none;
+    width: 100%;
+    display: block;
+  }
+
+  .empty-state {
+    flex: 1;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; color: #334155; text-align: center; gap: 12px;
+  }
+  .empty-state .icon { font-size: 3rem; }
+  .empty-state p { font-size: 0.9rem; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="dot" title="Live — updates automatically"></div>
+  <span class="header-icon">🗺️</span>
+  <span class="header-label" id="header-label">Waiting for a route…</span>
+  <span class="badge">route</span>
+  <span class="header-meta" id="header-meta"></span>
+</div>
+
+<div class="empty-state" id="empty-state">
+  <div class="icon">🛣️</div>
+  <p>Waiting for a route plan…<br>Ask George to plan your visits to see the map here.</p>
+</div>
+<iframe class="map-frame" id="map-frame" src="" style="display:none;"></iframe>
+
+<script>
+let lastMapUrl = null;
+
+async function poll() {
+  try {
+    const res  = await fetch('/api/latest-map');
+    const data = await res.json();
+    const url  = data.map_url || '';
+    if (url && url !== lastMapUrl) {
+      lastMapUrl = url;
+      document.getElementById('map-frame').src = url;
+      document.getElementById('map-frame').style.display = 'block';
+      document.getElementById('empty-state').style.display = 'none';
+      document.getElementById('header-label').textContent = data.spoken_text || 'Route planned';
+      document.getElementById('header-meta').textContent = new Date().toLocaleTimeString();
+    }
+  } catch (e) {
+    console.warn('Poll error:', e);
+  }
+}
+
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

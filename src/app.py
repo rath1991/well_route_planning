@@ -54,6 +54,8 @@ async def lifespan(app: FastAPI):
 
 # In-memory store for the latest data query result (updated on every data query)
 _latest_result: dict = {}
+# In-memory store for the latest route map (updated on every route query)
+_latest_map: dict = {}
 # Full data_preview from the most recent data query.
 # ElevenLabs sends two separate HTTP requests (data, then route); this bridges them.
 # The route endpoint uses this directly, supplementing from DB only for missing lat/lon.
@@ -157,10 +159,22 @@ def latest_result():
     return _latest_result
 
 
+@app.get("/map")
+def map_page():
+    """Serve the persistent route-map window."""
+    return FileResponse(STATIC_DIR / "map.html")
+
+
+@app.get("/api/latest-map")
+def latest_map():
+    """Return the most recent route map URL for the map page to poll."""
+    return _latest_map
+
+
 @app.post("/webhook/elevenlabs/query", dependencies=[Depends(webhook_guard)])
 def webhook_query(req: WebhookQueryRequest, request: Request) -> dict:
     """Main ElevenLabs entrypoint — detects intent and routes accordingly."""
-    global _latest_result, _last_data_preview, _last_well_ids
+    global _latest_result, _latest_map, _last_data_preview, _last_well_ids
 
     if not db_exists():
         raise HTTPException(status_code=400, detail="Database not seeded. Call POST /admin/seed first.")
@@ -178,7 +192,7 @@ def webhook_query(req: WebhookQueryRequest, request: Request) -> dict:
         # Otherwise use the full cached data_preview from the previous data query —
         # coordinates are fetched from DB inside handle_route_from_cached if missing.
         if req.context.must_visit_ids:
-            return handle_route_query(
+            route_result = handle_route_query(
                 query=req.query,
                 start=start,
                 time_budget_minutes=req.context.time_budget_minutes,
@@ -189,14 +203,14 @@ def webhook_query(req: WebhookQueryRequest, request: Request) -> dict:
             )
         elif _last_data_preview:
             logger.info("Using cached data_preview (%d rows) for routing", len(_last_data_preview))
-            return handle_route_from_cached(
+            route_result = handle_route_from_cached(
                 cached_rows=_last_data_preview,
                 start=start,
                 time_budget_minutes=req.context.time_budget_minutes,
                 base_url=base_url,
             )
         else:
-            return handle_route_query(
+            route_result = handle_route_query(
                 query=req.query,
                 start=start,
                 time_budget_minutes=req.context.time_budget_minutes,
@@ -204,6 +218,16 @@ def webhook_query(req: WebhookQueryRequest, request: Request) -> dict:
                 top_n_candidates=req.context.top_n_candidates,
                 base_url=base_url,
             )
+
+        # Store latest map for the persistent /map polling page
+        map_url = route_result.get("artifacts", {}).get("map_url", "")
+        if map_url:
+            _latest_map = {
+                "map_url": map_url,
+                "spoken_text": route_result.get("spoken_text", ""),
+            }
+        route_result["map_page_url"] = f"{base_url}/map"
+        return route_result
     else:
         result = handle_data_query(query=req.query, base_url=base_url)
 
