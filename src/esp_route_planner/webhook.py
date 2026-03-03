@@ -138,7 +138,7 @@ _WELL_COLS = """
 def handle_route_from_cached(
     cached_rows: list[dict],
     start: Location,
-    time_budget_minutes: int = 360,
+    time_budget_minutes: int = 540,
     base_url: str = "http://127.0.0.1:8000",
 ) -> dict:
     """Plan a route using the full output from a previous data query.
@@ -204,7 +204,7 @@ def handle_route_query(
     query: str,
     start: Location,
     end: Location | None = None,
-    time_budget_minutes: int = 360,
+    time_budget_minutes: int = 540,
     max_stops: int = 8,
     top_n_candidates: int = 12,
     must_visit_ids: list[str] | None = None,

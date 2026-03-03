@@ -138,7 +138,7 @@ class StartLocation(BaseModel):
 
 class WebhookContext(BaseModel):
     start_location: StartLocation = Field(default_factory=StartLocation)
-    time_budget_minutes: int = Field(default=360, gt=0)
+    time_budget_minutes: int = Field(default=540, gt=0)
     max_stops: int = Field(default=8, gt=0)
     top_n_candidates: int = Field(default=12, gt=0)
     must_visit_ids: list[str] = Field(default_factory=list)
@@ -264,7 +264,7 @@ def webhook_query(req: WebhookQueryRequest, request: Request) -> dict:
 class DirectRouteRequest(BaseModel):
     query: str = "Plan my visits"
     start_location: StartLocation = Field(default_factory=StartLocation)
-    time_budget_minutes: int = Field(default=360, gt=0)
+    time_budget_minutes: int = Field(default=540, gt=0)
     max_stops: int = Field(default=8, gt=0)
     top_n_candidates: int = Field(default=12, gt=0)
     must_visit_ids: list[str] = Field(default_factory=list)
