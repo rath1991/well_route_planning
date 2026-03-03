@@ -27,6 +27,9 @@ SQL: SELECT issue_category, COUNT(*) AS count FROM ops_recommendations_latest WH
 Q: Which high producing wells have reliability issues?
 SQL: SELECT v.well_id, v.name, v.oil_bpd, v.issue_category, v.action_required, v.priority_score FROM well_priority_vw v WHERE v.oil_bpd >= 300 AND v.issue_category IS NOT NULL ORDER BY v.oil_bpd DESC
 
+Q: Show me wells with high water cut
+SQL: SELECT v.well_id, v.name, v.water_cut_pct, v.oil_bpd, v.priority_score FROM well_priority_vw v WHERE v.water_cut_pct > 70 ORDER BY v.water_cut_pct DESC LIMIT 20
+
 Q: Which wells should I focus on first?
 SQL: SELECT well_id, name, oil_bpd, priority_score, issue_category, action_required FROM well_priority_vw ORDER BY priority_score DESC LIMIT 10
 
