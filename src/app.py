@@ -223,9 +223,9 @@ def webhook_query(req: WebhookQueryRequest, request: Request) -> dict:
         # Store for the polling page
         _latest_result = {"query": req.query, **result}
 
-        # Open the results window every time — if the tab is already open it
-        # will update itself via polling; if it was closed this reopens it
-        webbrowser.open(results_url)
+        # Open the results window locally — skipped in prod (server has no browser)
+        if not IS_PROD:
+            webbrowser.open(results_url)
 
         # Include URL in response so ngrok / remote clients can open it too
         result["results_url"] = results_url

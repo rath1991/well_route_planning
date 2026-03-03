@@ -7,6 +7,7 @@ returns voice-friendly JSON.
 from __future__ import annotations
 
 import logging
+import os
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -386,8 +387,9 @@ def handle_route_query(
     plan_path.write_text(json.dumps(plan_data, indent=2), encoding="utf-8")
     plan_url = f"{base_url}/outputs/plans/plan_{ts}.json"
 
-    # Open the animated map in the local browser
-    webbrowser.open(map_url)
+    # Open the animated map in the local browser — skipped in prod (server has no browser)
+    if os.environ.get("ENV", "dev").lower() != "prod":
+        webbrowser.open(map_url)
 
     total_priority = sum(priority_scores[i] for i in result.visited_indices)
     n_visited = len(result.visited_indices)
