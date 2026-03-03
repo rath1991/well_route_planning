@@ -189,6 +189,7 @@ def build_transit_map(
                 break
 
         drive_min = sched_entry["drive_minutes"] if sched_entry else 0
+        svc_min = sched_entry["service_minutes"] if sched_entry else 0
         eta = sched_entry["eta"] if sched_entry else "?"
         action = w.get("action_required", "")
 
@@ -196,6 +197,7 @@ def build_transit_map(
             f"<div style='min-width:220px;font-family:sans-serif;font-size:13px;'>"
             f"<b>Stop {rank}: {w['name']}</b><br>"
             f"<b>ETA:</b> {eta} (drive ~{drive_min:.0f} min)<br>"
+            f"<b>Time on site:</b> ~{svc_min:.0f} min<br>"
             f"<b>Priority:</b> {bd.priority_score:.1f} / 100<br>"
             f"<hr style='margin:4px 0;'>"
             f"<b>Oil:</b> {w.get('oil_bpd', 0):.0f} bpd<br>"
@@ -212,7 +214,7 @@ def build_transit_map(
         folium.Marker(
             [w["lat"], w["lon"]],
             popup=popup_html,
-            tooltip=f"Stop {rank}: {w['name']} (~{drive_min:.0f} min drive)",
+            tooltip=f"Stop {rank}: {w['name']} (~{drive_min:.0f} min drive, ~{svc_min:.0f} min on site)",
             icon=folium.DivIcon(
                 html=(
                     f'<div style="background:#2563eb;color:white;border-radius:50%;'
@@ -262,8 +264,9 @@ def build_transit_map(
                 break
         eta = sched_entry["eta"] if sched_entry else "?"
         drive = sched_entry["drive_minutes"] if sched_entry else 0
+        svc = sched_entry["service_minutes"] if sched_entry else 0
         commentary_lines.append(
-            f"<b>Stop {rank}</b> ({eta}, ~{drive:.0f} min drive): {w['name']} "
+            f"<b>Stop {rank}</b> ({eta}, ~{drive:.0f} min drive, ~{svc:.0f} min on site): {w['name']} "
             f"&mdash; Priority {bd.priority_score:.1f}"
         )
 
